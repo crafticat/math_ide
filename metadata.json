@@ -1,0 +1,5 @@
+{
+  "name": "MathBrain IDE",
+  "description": "A JetBrains-inspired IDE for writing mathematical documents using a custom pre-processor syntax that compiles to LaTeX.",
+  "requestFramePermissions": []
+}
