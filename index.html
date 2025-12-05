@@ -7,37 +7,48 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Playfair+Display:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8" crossorigin="anonymous"></script>
     <style>
-      /* Custom Scrollbar for IDE feel */
+      /* Custom Scrollbar - Academic Sepia theme */
       ::-webkit-scrollbar {
         width: 10px;
         height: 10px;
       }
       ::-webkit-scrollbar-track {
-        background: #1e1e1e; 
+        background: #1a1816;
       }
       ::-webkit-scrollbar-thumb {
-        background: #424242; 
-        border-radius: 0px;
+        background: #3d3835;
+        border-radius: 2px;
       }
       ::-webkit-scrollbar-thumb:hover {
-        background: #4f4f4f; 
+        background: #524b45;
       }
       body {
-        background-color: #1e1e1e;
-        color: #cccccc;
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        background-color: #1a1816;
+        color: #e8e4df;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         overflow: hidden;
         margin: 0;
       }
-      
-      /* Force font consistency */
+
+      /* Typography classes */
+      .font-display {
+        font-family: 'Playfair Display', Georgia, serif;
+      }
+      .font-sans {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      }
       .code-font {
         font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace !important;
         font-variant-ligatures: none;
+      }
+
+      /* Smooth transitions for theme switching */
+      * {
+        transition: background-color 0.15s ease, border-color 0.15s ease;
       }
     </style>
   <script type="importmap">
@@ -53,5 +64,6 @@
 </head>
   <body>
     <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
   </body>
 </html>

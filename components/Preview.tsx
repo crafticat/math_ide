@@ -1,7 +1,7 @@
 
-
 import React, { useEffect, useRef, useState } from 'react';
-import { THEME } from '../constants';
+import { DARK_THEME, LIGHT_THEME } from '../constants';
+import { Eye } from 'lucide-react';
 
 // Declare KaTeX globally
 declare global {
@@ -12,31 +12,38 @@ declare global {
 
 interface PreviewProps {
   latexLines: { id: string; latex: string; originalLine: number }[];
+  theme?: 'dark' | 'light';
 }
 
-const EquationBlock: React.FC<{ latex: string }> = ({ latex }) => {
+interface EquationBlockProps {
+  latex: string;
+  lineNumber: number;
+  theme: 'dark' | 'light';
+}
+
+const EquationBlock: React.FC<EquationBlockProps> = ({ latex, lineNumber, theme }) => {
     const ref = useRef<HTMLDivElement>(null);
     const [error, setError] = useState<string | null>(null);
+    const colors = theme === 'dark' ? DARK_THEME : LIGHT_THEME;
 
     useEffect(() => {
         if (!ref.current || !window.katex) return;
-        
+
         // Handle lines that are purely whitespace or empty
         if (!latex || !latex.trim()) {
-            ref.current.innerHTML = '<div style="height: 0.5em;"></div>'; 
+            ref.current.innerHTML = '<div style="height: 0.75em;"></div>';
             return;
         }
-        
+
         try {
-            // Using renderToString is safer for restricted environments
             const html = window.katex.renderToString(latex, {
-                throwOnError: false, 
-                errorColor: '#cc0000',
+                throwOnError: false,
+                errorColor: '#ff6b6b',
                 displayMode: true,
-                output: 'html', 
+                output: 'html',
                 strict: false,
                 trust: true,
-                fleqn: true // Hint for left alignment
+                fleqn: true
             });
 
             ref.current.innerHTML = html;
@@ -49,61 +56,75 @@ const EquationBlock: React.FC<{ latex: string }> = ({ latex }) => {
 
     if (error) {
         return (
-            <div className="my-2 p-2 bg-red-900/20 border border-red-900/50 rounded text-red-400 text-xs font-mono break-all">
-                <div className="font-bold mb-1">Rendering Error:</div>
-                {error}
-                <div className="mt-2 text-gray-500">Source: {latex}</div>
+            <div className="my-1.5 p-3 bg-red-500/10 border border-red-500/30 rounded-md text-red-400 text-xs font-mono">
+                <div className="font-semibold mb-1 text-red-300">Rendering Error</div>
+                <div className="opacity-80">{error}</div>
+                <div className="mt-2 text-gray-500 text-[10px] truncate">LaTeX: {latex}</div>
             </div>
         );
     }
 
     return (
-        <div 
-            ref={ref} 
-            className="my-0.5 px-2 hover:bg-[#2d2d2d] rounded transition-colors text-lg" 
-            title={latex} 
-        />
+        <div
+            className="group flex items-start rounded transition-colors duration-150"
+            style={{ backgroundColor: 'transparent' }}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.activeItem}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+        >
+            <div
+                className="flex-shrink-0 w-8 pt-2 text-[10px] font-mono text-right pr-2 select-none opacity-0 group-hover:opacity-100 transition-opacity"
+                style={{ color: colors.textDim }}
+            >
+                {lineNumber}
+            </div>
+            <div
+                ref={ref}
+                className="flex-1 py-1 pr-2"
+                title={latex}
+                style={{ color: colors.text }}
+            />
+        </div>
     );
 };
 
-export const Preview: React.FC<PreviewProps> = ({ latexLines }) => {
+export const Preview: React.FC<PreviewProps> = ({ latexLines, theme = 'dark' }) => {
+  const colors = theme === 'dark' ? DARK_THEME : LIGHT_THEME;
+
   return (
-    <div className={`h-full w-full flex flex-col ${THEME.bg} border-l ${THEME.border}`}>
+    <div className="h-full w-full flex flex-col" style={{ backgroundColor: colors.bg }}>
       <style>{`
         /* Force KaTeX display equations to align left */
         .katex-display {
             text-align: left !important;
-            margin-left: 0 !important;
-            margin-top: 0.2em !important;
-            margin-bottom: 0.2em !important;
+            margin: 0 !important;
+            padding: 0 !important;
             width: 100%;
         }
-        /* Ensure the math track itself starts from left */
         .katex-display > .katex {
             text-align: left !important;
         }
-        /* Fix spacing inside the block */
         .katex-display > .katex > .katex-html {
             width: 100%;
         }
-        /* Add some padding to the whole container via CSS for consistency */
-        .katex-display {
-             padding-left: 10px; 
+        .katex {
+            font-size: 1.05em;
+            color: ${colors.text};
         }
       `}</style>
-      <div className={`p-2 border-b ${THEME.border} flex items-center justify-between bg-[#252526]`}>
-        <span className="text-xs font-bold text-gray-400 uppercase tracking-wider pl-2">Preview</span>
-      </div>
-      
-      <div className="flex-1 overflow-auto p-4">
+
+      <div className="flex-1 overflow-auto px-2 py-3">
          {latexLines.length === 0 ? (
-             <div className="text-gray-500 text-center mt-20 text-sm select-none">
-                 Type in the editor to see results...
+             <div className="flex flex-col items-center justify-center h-full select-none" style={{ color: colors.textDim }}>
+                 <Eye size={32} className="mb-3 opacity-30" />
+                 <span className="text-sm">Live preview</span>
+                 <span className="text-xs opacity-60 mt-1">Results appear as you type</span>
              </div>
          ) : (
-             latexLines.map((line) => (
-                 <EquationBlock key={line.id} latex={line.latex} />
-             ))
+             <div className="space-y-0.5">
+                 {latexLines.map((line) => (
+                     <EquationBlock key={line.id} latex={line.latex} lineNumber={line.originalLine} theme={theme} />
+                 ))}
+             </div>
          )}
       </div>
     </div>

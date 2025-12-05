@@ -19,3 +19,19 @@ export interface FileNode {
   content?: string;
   active?: boolean;
 }
+
+export interface AppSettings {
+  sidebarVisible: boolean;
+  consoleVisible: boolean;
+  previewVisible: boolean;
+  editorZoom: number;
+  theme: 'dark' | 'light';
+}
+
+export interface MenuItemDef {
+  label: string;
+  shortcut?: string;
+  action: () => void;
+  disabled?: boolean;
+  dividerAfter?: boolean;
+}
