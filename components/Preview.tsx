@@ -110,13 +110,29 @@ export const Preview: React.FC<PreviewProps> = ({ latexLines, theme = 'dark' }) 
             font-size: 1.05em;
             color: ${colors.text};
         }
+        /* Style Problem/Theorem/Proof headers */
+        .katex .textbf {
+            color: ${colors.accent};
+        }
       `}</style>
 
-      <div className="flex-1 overflow-auto px-2 py-3">
+      {/* Preview header */}
+      <div
+        className="flex-shrink-0 px-4 py-2 text-[11px] font-semibold uppercase tracking-wider select-none"
+        style={{
+          color: colors.textDim,
+          borderBottom: `1px solid ${colors.border}`,
+          backgroundColor: colors.sidebar,
+        }}
+      >
+        Preview
+      </div>
+
+      <div className="flex-1 overflow-auto px-3 py-4">
          {latexLines.length === 0 ? (
              <div className="flex flex-col items-center justify-center h-full select-none" style={{ color: colors.textDim }}>
-                 <Eye size={32} className="mb-3 opacity-30" />
-                 <span className="text-sm">Live preview</span>
+                 <Eye size={32} className="mb-3 opacity-30" style={{ color: colors.accent }} />
+                 <span className="text-sm" style={{ fontFamily: "'Playfair Display', Georgia, serif" }}>Live Preview</span>
                  <span className="text-xs opacity-60 mt-1">Results appear as you type</span>
              </div>
          ) : (

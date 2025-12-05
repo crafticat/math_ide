@@ -354,17 +354,32 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
         .replace(/'/g, "&#039;");
     };
 
-    // Color categories
+    // Get syntax colors from theme
+    const themeColors = theme === 'dark' ? DARK_THEME : LIGHT_THEME;
+    const syntaxColors = themeColors.syntax || {
+        keyword: '#d4a373',
+        function: '#a8c686',
+        symbol: '#87aecd',
+        greek: '#d4a5a5',
+        number: '#b8c4a0',
+        comment: '#6b6358',
+        string: '#c9a227',
+        operator: '#d4a373',
+        bracket: '#c9a227',
+    };
+
+    // Color categories using theme
     const colors = {
-        comment: '#6a9955',
-        keyword: '#c586c0',      // Purple - scope keywords
-        mathSymbol: '#4fc1ff',   // Cyan - math symbols that get replaced (exists, forall, in)
-        greek: '#ce9178',        // Orange - greek letters
-        operator: '#d7ba7d',     // Yellow - operators like ->, =>
-        number: '#b5cea8',       // Light green - numbers
-        mathPackage: '#4ec9b0',  // Teal - Math.xxx
-        function: '#dcdcaa',     // Yellow - functions like integral, sum
-        string: '#ce9178',       // Orange - strings
+        comment: syntaxColors.comment,
+        keyword: syntaxColors.keyword,       // Warm amber - scope keywords
+        mathSymbol: syntaxColors.symbol,     // Soft blue - math symbols
+        greek: syntaxColors.greek,           // Dusty rose - greek letters
+        operator: syntaxColors.operator,     // Warm amber - operators
+        number: syntaxColors.number,         // Muted green - numbers
+        mathPackage: themeColors.accentSecondary || themeColors.accent, // Sage green - Math.xxx
+        function: syntaxColors.function,     // Sage green - functions
+        string: syntaxColors.string,         // Gold - strings
+        bracket: syntaxColors.bracket,       // Gold - brackets
     };
 
     return code.split('\n').map((line) => {
@@ -386,7 +401,7 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
 
         // 3. Math.Package
         processed = processed.replace(/(Math)(\.)([a-zA-Z0-9_]+)/g,
-            `<span style="color: ${colors.mathPackage};">$1</span><span style="color: #d4d4d4;">$2</span><span style="color: #9cdcfe;">$3</span>`
+            `<span style="color: ${colors.mathPackage};">$1</span><span style="color: ${themeColors.textDim};">$2</span><span style="color: ${colors.function};">$3</span>`
         );
 
         // 4. Scope Keywords (Purple) - Problem, Theorem, Proof, Case, etc.
@@ -433,14 +448,14 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
         // a_i highlights the _ and subscript, x^2 highlights the ^ and superscript
         // Note: Do NOT change font-size here as it breaks cursor alignment
         processed = processed.replace(/(_)([a-zA-Z0-9]+)/g,
-            '<span style="color: #569cd6;">$1</span><span style="color: #9cdcfe;">$2</span>'
+            `<span style="color: ${colors.operator};">$1</span><span style="color: ${colors.mathSymbol};">$2</span>`
         );
         processed = processed.replace(/(\^)([a-zA-Z0-9]+)/g,
-            '<span style="color: #569cd6;">$1</span><span style="color: #9cdcfe;">$2</span>'
+            `<span style="color: ${colors.operator};">$1</span><span style="color: ${colors.mathSymbol};">$2</span>`
         );
 
         // 11. Braces and brackets
-        processed = processed.replace(/([{}()\[\]])/g, '<span style="color: #ffd700;">$1</span>');
+        processed = processed.replace(/([{}()\[\]])/g, `<span style="color: ${colors.bracket};">$1</span>`);
 
         if (processed === '') return ' ';
         return processed;

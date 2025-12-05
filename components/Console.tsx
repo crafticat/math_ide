@@ -9,16 +9,16 @@ interface ConsoleProps {
   theme?: 'dark' | 'light';
 }
 
-const LogIcon: React.FC<{ type: string }> = ({ type }) => {
+const LogIcon: React.FC<{ type: string; colors: typeof DARK_THEME }> = ({ type, colors }) => {
     switch (type) {
         case 'error':
-            return <AlertCircle size={12} className="text-red-400 flex-shrink-0" />;
+            return <AlertCircle size={12} className="flex-shrink-0" style={{ color: colors.error }} />;
         case 'warning':
-            return <AlertTriangle size={12} className="text-yellow-400 flex-shrink-0" />;
+            return <AlertTriangle size={12} className="flex-shrink-0" style={{ color: colors.warning }} />;
         case 'success':
-            return <CheckCircle size={12} className="text-green-400 flex-shrink-0" />;
+            return <CheckCircle size={12} className="flex-shrink-0" style={{ color: colors.success }} />;
         default:
-            return <Info size={12} className="text-blue-400 flex-shrink-0" />;
+            return <Info size={12} className="flex-shrink-0" style={{ color: colors.info }} />;
     }
 };
 
@@ -43,7 +43,7 @@ export const Console: React.FC<ConsoleProps> = ({ logs, theme = 'dark' }) => {
         <div className="flex items-center gap-4 px-2">
             <span className="text-[11px] font-medium cursor-pointer relative py-1" style={{ color: colors.text }}>
                 Output
-                <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#0e639c]" />
+                <div className="absolute bottom-0 left-0 right-0 h-[2px]" style={{ backgroundColor: colors.accent }} />
             </span>
             <span
               className="text-[11px] cursor-pointer py-1 transition-colors"
@@ -91,14 +91,14 @@ export const Console: React.FC<ConsoleProps> = ({ logs, theme = 'dark' }) => {
                       onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.activeItem}
                       onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                     >
-                        <LogIcon type={log.type} />
+                        <LogIcon type={log.type} colors={colors} />
                         <span className="select-none text-[10px] pt-px" style={{ color: colors.textDim }}>{log.timestamp}</span>
-                        <span className={`
-                             ${log.type === 'error' ? 'text-red-400' : ''}
-                             ${log.type === 'success' ? 'text-[#89d185]' : ''}
-                             ${log.type === 'warning' ? 'text-yellow-400' : ''}
-                             ${log.type === 'info' ? '' : ''}
-                        `} style={{ color: log.type === 'info' ? colors.text : undefined }}>
+                        <span style={{
+                          color: log.type === 'error' ? colors.error :
+                                 log.type === 'success' ? colors.success :
+                                 log.type === 'warning' ? colors.warning :
+                                 colors.text
+                        }}>
                             {log.message}
                         </span>
                     </div>
