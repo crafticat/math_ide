@@ -1,20 +1,121 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# MathBrain IDE
 
-# Run and deploy your AI Studio app
-
-This contains everything you need to run your app locally.
-
-View your app in AI Studio: https://ai.studio/apps/drive/1jADnFKiSF74dVtd8E_bCxWOlbuhP1HV3
+A browser-based mathematical notation editor that compiles MathScript syntax to LaTeX, rendered in real-time via KaTeX.
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
-
+**Prerequisites:** Node.js
 
 1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+   ```bash
+   npm install
+   ```
+
+2. Run the app:
+   ```bash
+   npm run dev
+   ```
+
+3. Open http://localhost:3000 in your browser
+
+## MathScript Syntax
+
+MathBrain IDE uses a custom "MathScript" language that compiles to LaTeX:
+
+### Scopes
+```
+Problem My Problem Title {
+  Theorem Important Result {
+    ...
+  }
+  Proof {
+    ...
+  }
+}
+```
+Supported: `Problem`, `Theorem`, `Proof`, `Case`, `Lemma`, `Section`, `Part`, `Subproblem`
+
+### Functions
+| MathScript | LaTeX |
+|------------|-------|
+| `sqrt(x)` | `\sqrt{x}` |
+| `integral(a -> b)` | `\int_{a}^{b}` |
+| `sum(i=1 -> n)` | `\sum_{i=1}^{n}` |
+| `lim_(x -> 0)` | `\lim_{x \to 0}` |
+| `choose(n, k)` | `\binom{n}{k}` |
+| `factorial(n)` | `n!` |
+
+### Fractions
+```
+a/b              -> \frac{a}{b}
+(a+b)/(c+d)      -> \frac{a+b}{c+d}
+```
+
+### Subscripts & Superscripts
+```
+a_i              -> a_{i}
+x^2              -> x^{2}
+e^(i*pi)         -> e^{i*pi}
+```
+
+### Absolute Value
+```
+|x - a|          -> \left|x - a\right|
+```
+
+### Logic & Sets
+| MathScript | Symbol |
+|------------|--------|
+| `exists` | `\exists` |
+| `forall` | `\forall` |
+| `suchthat` | s.t. |
+| `in` | `\in` |
+| `notin` | `\notin` |
+| `subset` | `\subset` |
+| `union` | `\cup` |
+| `intersect` | `\cap` |
+| `AND` | `\land` |
+| `OR` | `\lor` |
+| `NOT` | `\neg` |
+
+### Operators
+| MathScript | Symbol |
+|------------|--------|
+| `+-` | `\pm` |
+| `-+` | `\mp` |
+| `=>` | `\implies` |
+| `<=>` | `\iff` |
+| `!=` | `\neq` |
+| `<=` | `\le` |
+| `>=` | `\ge` |
+
+### Greek Letters
+`alpha`, `beta`, `gamma`, `delta`, `epsilon`, `theta`, `lambda`, `sigma`, `omega`, `pi`, `mu`, `phi`, `rho`, `tau`, and more.
+
+### Macros
+Define shortcuts for commonly used symbols:
+```
+#define eps epsilon
+#define R Math.reals
+
+// Now use them:
+forall eps > 0, exists x in R
+```
+
+### Math Package
+| MathScript | Symbol |
+|------------|--------|
+| `Math.pi` | `\pi` |
+| `Math.e` | `e` |
+| `Math.inf` | `\infty` |
+| `Math.reals` | `\mathbb{R}` |
+| `Math.naturals` | `\mathbb{N}` |
+| `Math.integers` | `\mathbb{Z}` |
+| `Math.rationals` | `\mathbb{Q}` |
+| `Math.complex` | `\mathbb{C}` |
+
+## Build for Production
+
+```bash
+npm run build
+```
