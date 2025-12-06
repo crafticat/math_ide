@@ -1,51 +1,82 @@
 
 
-export const INITIAL_CONTENT = `// MathBrain IDE v1.4
-// Example: Intermediate Value Theorem Proof
+export const INITIAL_CONTENT = `// MathBrain IDE - MathScript Language Demo
+// A complete showcase of syntax features
 
-Problem Intermediate Value Theorem {
-  
-  Theorem IVT {
-    Let f be a continuous function on the closed interval [a, b]
-    Let y be any value between f(a) and f(b)
-    
-    Then there exists c in [a, b] suchthat f(c) = y
+// === MACROS ===
+// Define shortcuts for commonly used symbols
+#define eps epsilon
+#define del delta
+#define R Math.reals
+#define N Math.naturals
+
+Problem Analysis and Combinatorics {
+
+  // === CALCULUS ===
+
+  Theorem Fundamental Theorem of Calculus {
+    Let f be continuous on [a, b]
+    Let F(x) = integral(a -> x) f(t) dt
+
+    Then F'(x) = f(x) forall x in (a, b)
+
+    And integral(a -> b) f(x) dx = F(b) - F(a)
   }
 
   Proof {
-    // Assume f(a) < y < f(b) without loss of generality
-    Let S = { x in [a, b] | f(x) < y }
-    
-    1. S is non-empty because a in S (since f(a) < y)
-    2. S is bounded above by b
-    
-    Therefore by the Completeness Axiom
-    Let c = sup(S)
-    
-    We claim that f(c) = y
-    
-    Case 1 (Assumption f(c) < y) {
-       Since f is continuous at c
-       there exists delta > 0 suchthat f(x) < y forall x in (c - delta, c + delta)
-       
-       This implies there exists x > c with x in S
-       But c = sup(S) therefore this is a contradiction
-    }
+    Let eps > 0 be given
 
-    Case 2 (Assumption f(c) > y) {
-       Since f is continuous at c
-       there exists delta > 0 suchthat f(x) > y forall x in (c - delta, c + delta)
-       
-       This implies that no x in (c - delta, c) can be in S
-       Thus c - delta is an upper bound for S
-       
-       But c = sup(S) is the least upper bound
-       Contradiction
-    }
-    
-    Therefore f(c) = y
+    Since f is continuous at x
+    exists del > 0 suchthat |f(t) - f(x)| < eps forall t in (x - del, x + del)
+
+    Consider lim_(h -> 0) (F(x + h) - F(x))/h
+
+    = lim_(h -> 0) (1/h) integral(x -> x+h) f(t) dt
+
+    = f(x)
+
     QED
   }
+
+  // === COMBINATORICS ===
+
+  Theorem Binomial Theorem {
+    forall n in N and forall a, b in R
+
+    (a + b)^n = sum(k=0 -> n) choose(n, k) * a^(n-k) * b^k
+  }
+
+  Lemma Factorial Identity {
+    choose(n, k) = factorial(n) / factorial(k) / factorial(n - k)
+
+    For example: choose(5, 2) = 10
+    Since factorial(5) = 120 and factorial(2) = 2 and factorial(3) = 6
+  }
+
+  // === LOGIC AND SETS ===
+
+  Theorem De Morgan Laws {
+    Let A, B be sets
+
+    Case Complement of Union {
+      x notin A union B <=> x notin A AND x notin B
+    }
+
+    Case Complement of Intersection {
+      x notin A intersect B <=> x notin A OR x notin B
+    }
+  }
+
+  // === FAMOUS EQUATIONS ===
+
+  // Euler's Identity
+  e^(i * Math.pi) + 1 = 0
+
+  // Quadratic Formula
+  x = (-b +- sqrt(b^2 - 4*a*c)) / (2*a)
+
+  // Gaussian Integral
+  integral(-inf -> inf) e^(-x^2) dx = sqrt(pi)
 }
 `;
 
@@ -175,91 +206,7 @@ export const THEME = {
   popupActive: 'bg-[#04395e]', // Autocomplete selection
 };
 
-export const DEFAULT_FILE_CONTENT = `// MathScript Example - Feature Showcase
-// This file demonstrates the key features of MathScript syntax
-
-Problem Calculus Fundamentals {
-
-  // === BASIC MATH NOTATION ===
-
-  Let f(x) = x^2 + 2x + 1
-  Let g(x) = (x + 1)^2
-
-  Therefore f(x) = g(x) forall x in Math.reals
-
-  // === FRACTIONS ===
-
-  The derivative is f'(x) = (2x + 2)/1 = 2(x + 1)
-
-  A complex fraction: ((a + b)/(c + d)) / ((e + f)/(g + h))
-
-  // === INTEGRALS AND LIMITS ===
-
-  Theorem Fundamental Theorem {
-    Let F(x) = integral(a -> x) f(t) dt
-
-    Then F'(x) = f(x)
-
-    And lim_(h -> 0) (F(x + h) - F(x))/h = f(x)
-  }
-
-  // === SUMMATIONS ===
-
-  Lemma Geometric Series {
-    sum(k=0 -> n) r^k = (1 - r^(n+1))/(1 - r) for r != 1
-  }
-
-  // === LOGIC AND QUANTIFIERS ===
-
-  Proof {
-    Assume exists x suchthat P(x) AND Q(x)
-
-    Case 1 (P(x) implies R(x)) {
-      Since P(x) => R(x)
-      Therefore R(x) holds
-    }
-
-    Case 2 (NOT P(x)) {
-      This leads to a contradiction
-    }
-
-    Therefore forall x, P(x) OR NOT Q(x)
-    QED
-  }
-
-  // === GREEK LETTERS ===
-
-  Let epsilon > 0 be arbitrary
-  Choose delta = epsilon / (2 * pi)
-  Then alpha + beta = gamma
-
-  // === SET THEORY ===
-
-  Let A subset B
-  Let x in A union C
-  Then x in B union C
-
-  If x notin A intersect B
-  Then x notin A OR x notin B
-
-  // === SPECIAL OPERATORS ===
-
-  The solution is x = +- sqrt(b^2 - 4ac) / 2a
-
-  We have a <=> b iff a => b AND b => a
-
-  Since a <= b AND b >= c
-  Therefore a != c OR a = c
-
-  // === MATH CONSTANTS ===
-
-  e^(i * Math.pi) + 1 = 0
-
-  The area is Math.pi * r^2
-
-  sqrt(2) is in Math.reals but not in Math.rationals
-}
-`;
+export const DEFAULT_FILE_CONTENT = INITIAL_CONTENT;
 
 export const AUTOCOMPLETE_DATA = [
     // Scopes / Headers - $0 marks cursor position
@@ -292,6 +239,8 @@ export const AUTOCOMPLETE_DATA = [
     { label: 'sqrt', type: 'function', insert: 'sqrt($0)' },
     { label: 'vec', type: 'function', insert: 'vec($0)' },
     { label: 'frac', type: 'function', insert: '($0)/()' },
+    { label: 'factorial', type: 'function', insert: 'factorial($0)' },
+    { label: 'choose', type: 'function', insert: 'choose($0, )' },
     
     // Set Theory
     { label: 'in', type: 'operator', insert: 'in' },

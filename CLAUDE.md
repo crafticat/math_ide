@@ -33,7 +33,7 @@ MathBrain IDE is a React-based mathematical notation editor that compiles a cust
 
 The compiler recognizes:
 - **Scopes**: `Problem`, `Theorem`, `Proof`, `Case`, `Lemma` with `{ }` blocks
-- **Functions**: `sqrt(x)`, `integral(a -> b)`, `sum(i=1 -> n)`, `lim_(x -> 0)`
+- **Functions**: `sqrt(x)`, `integral(a -> b)`, `sum(i=1 -> n)`, `lim_(x -> 0)`, `choose(n, k)`, `factorial(n)`
 - **Fractions**: `a/b` or `(a+b)/(c+d)`
 - **Subscripts/Superscripts**: `a_i`, `x^2`
 - **Logic**: `AND`, `OR`, `NOT`, `exists`, `forall`, `suchthat`

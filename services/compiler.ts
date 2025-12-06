@@ -84,8 +84,18 @@ export const compileMathScript = (input: string): CompilationResult => {
   lines.forEach((line, index) => {
     let processedLine = line.trim();
     
-    // Skip comments/empty/defines
-    if (!processedLine || processedLine.startsWith('//') || processedLine.startsWith('#define')) {
+    // Skip empty lines and comments
+    if (!processedLine || processedLine.startsWith('//')) {
+      return;
+    }
+
+    // Parse #define macros: #define shortcut replacement
+    if (processedLine.startsWith('#define')) {
+      const defineMatch = processedLine.match(/^#define\s+(\S+)\s+(.+)$/);
+      if (defineMatch) {
+        const [, shortcut, replacement] = defineMatch;
+        macros[shortcut] = replacement;
+      }
       return;
     }
 
@@ -148,7 +158,11 @@ export const compileMathScript = (input: string): CompilationResult => {
     }
 
     // --- MACRO & COMPLEX REPLACEMENT ---
-    Object.keys(macros).forEach(k => { processedLine = processedLine.split(k).join(macros[k]); });
+    // Use word boundary regex to avoid matching inside other words (e.g., 'N' inside 'AND')
+    Object.keys(macros).forEach(k => {
+        const regex = new RegExp(`\\b${k}\\b`, 'g');
+        processedLine = processedLine.replace(regex, macros[k]);
+    });
     Object.keys(mathPackage).forEach(k => { processedLine = processedLine.split(k).join(mathPackage[k]); });
 
     // Placeholder system: protect complex LaTeX constructs from tokenization
@@ -225,20 +239,93 @@ export const compileMathScript = (input: string): CompilationResult => {
         return addPlaceholder(`\\langle ${content.replace(/,/g, ', ')} \\rangle`);
     });
 
+    // Choose/Binomial: choose(n, k) -> \binom{n}{k}
+    processedLine = processedLine.replace(/choose\s*\(\s*([^,]+)\s*,\s*([^)]+)\s*\)/g, (_, n, k) => {
+        return addPlaceholder(`\\binom{${processContent(n.trim())}}{${processContent(k.trim())}}`);
+    });
+
+    // Factorial: factorial(n) -> n!
+    processedLine = processedLine.replace(/factorial\s*\(\s*([^)]+)\s*\)/g, (_, content) => {
+        return addPlaceholder(`${processContent(content.trim())}!`);
+    });
+
+    // Absolute value: |...| -> \left|...\right|
+    // Handle nested absolute values by processing from innermost outward
+    let absChanged = true;
+    while (absChanged) {
+        absChanged = false;
+        // Match |...| where content doesn't contain unmatched |
+        processedLine = processedLine.replace(/\|([^|]+)\|/g, (_, content) => {
+            absChanged = true;
+            return addPlaceholder(`\\left|${processContent(content)}\\right|`);
+        });
+    }
+
     // Fractions: (a)/(b) -> \frac{a}{b}
-    // Handle parenthesized fractions first: (a+b)/(c+d)
-    processedLine = processedLine.replace(/\(([^)]+)\)\s*\/\s*\(([^)]+)\)/g, (_, num, den) => {
-        return addPlaceholder(`\\frac{${processContent(num)}}{${processContent(den)}}`);
-    });
-    // Handle (a+b)/c
-    processedLine = processedLine.replace(/\(([^)]+)\)\s*\/\s*([a-zA-Z0-9]+)/g, (_, num, den) => {
-        return addPlaceholder(`\\frac{${processContent(num)}}{${processContent(den)}}`);
-    });
-    // Handle a/(b+c)
-    processedLine = processedLine.replace(/([a-zA-Z0-9]+)\s*\/\s*\(([^)]+)\)/g, (_, num, den) => {
-        return addPlaceholder(`\\frac{${processContent(num)}}{${processContent(den)}}`);
-    });
-    // Handle simple a/b
+    // Helper to find matching closing paren, handling nesting
+    const findMatchingParen = (str: string, startIdx: number): number => {
+        let depth = 1;
+        for (let i = startIdx; i < str.length; i++) {
+            if (str[i] === '(') depth++;
+            else if (str[i] === ')') {
+                depth--;
+                if (depth === 0) return i;
+            }
+        }
+        return -1;
+    };
+
+    // Handle parenthesized fractions with proper nesting: (...)/(...)
+    const handleParenFractions = (line: string): string => {
+        let result = line;
+        let changed = true;
+        while (changed) {
+            changed = false;
+            // Look for pattern: (...)/(...) or (...)/simple
+            for (let i = 0; i < result.length; i++) {
+                if (result[i] === '(' ) {
+                    const closeIdx = findMatchingParen(result, i + 1);
+                    if (closeIdx === -1) continue;
+
+                    // Check if followed by /
+                    let afterClose = closeIdx + 1;
+                    while (afterClose < result.length && result[afterClose] === ' ') afterClose++;
+
+                    if (result[afterClose] === '/') {
+                        const num = result.substring(i + 1, closeIdx);
+                        let afterSlash = afterClose + 1;
+                        while (afterSlash < result.length && result[afterSlash] === ' ') afterSlash++;
+
+                        if (result[afterSlash] === '(') {
+                            // (...)/(...) case
+                            const denCloseIdx = findMatchingParen(result, afterSlash + 1);
+                            if (denCloseIdx !== -1) {
+                                const den = result.substring(afterSlash + 1, denCloseIdx);
+                                const placeholder = addPlaceholder(`\\frac{${processContent(num)}}{${processContent(den)}}`);
+                                result = result.substring(0, i) + placeholder + result.substring(denCloseIdx + 1);
+                                changed = true;
+                                break;
+                            }
+                        } else {
+                            // (...)/simple case
+                            const match = result.substring(afterSlash).match(/^([a-zA-Z0-9_]+|\\_PH\d+__)/);
+                            if (match) {
+                                const den = match[1];
+                                const placeholder = addPlaceholder(`\\frac{${processContent(num)}}{${processContent(den)}}`);
+                                result = result.substring(0, i) + placeholder + result.substring(afterSlash + den.length);
+                                changed = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return result;
+    };
+    processedLine = handleParenFractions(processedLine);
+
+    // Handle simple a/b (no parens)
     processedLine = processedLine.replace(/([a-zA-Z0-9]+)\s*\/\s*([a-zA-Z0-9]+)/g, (_, num, den) => {
         return addPlaceholder(`\\frac{${processContent(num)}}{${processContent(den)}}`);
     });
