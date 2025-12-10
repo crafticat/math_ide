@@ -8,8 +8,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm install          # Install dependencies
 npm run dev          # Start development server (http://localhost:3000)
 npm run build        # Build for production
-node test-advanced.mjs  # Run 100 compiler test cases
+node test-advanced.mjs  # Run 107 compiler test cases
 ```
+
+## Deployment
+
+When committing changes, always push to trigger GitHub Pages deployment:
+```bash
+git add -A && git commit -m "message" && git push
+```
+The site is deployed at: https://crafticat.github.io/math_ide/
 
 ## Architecture
 
