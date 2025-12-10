@@ -607,58 +607,71 @@ export const compileMathScript = (input: string): CompilationResult => {
     // Superscripts with parenthesized content: e^(i * pi) -> e^{i * pi}
     // Also handles fractions in exponents: x^(1/n) -> x^{\frac{1}{n}}
     // Handles placeholders: __PH0__^(1/n) -> placeholder with exponent
-    // Use a function to handle nested parentheses properly
+    // Handles chained exponents: x^(a)^(b)^(c) -> properly nested
+    // Runs in a loop to handle all chained exponents
     const handleParenthesizedExponent = (line: string): string => {
-        let result = '';
-        let i = 0;
-        while (i < line.length) {
-            // Look for pattern: ^(
-            if (line[i] === '^' && line[i + 1] === '(') {
-                // Check what precedes - could be a single char OR a placeholder like __PH0__
-                let base = '';
-                let baseStartIdx = result.length;
+        let current = line;
+        let changed = true;
+        let iterations = 0;
+        const maxIterations = 20;
 
-                // Check for placeholder ending: __PH\d+__
-                const placeholderMatch = result.match(/__PH(\d+)__$/);
-                if (placeholderMatch) {
-                    base = placeholderMatch[0];
-                    baseStartIdx = result.length - base.length;
-                } else if (result.length > 0) {
-                    // Single character base
-                    const lastChar = result[result.length - 1];
-                    if (/[a-zA-Z0-9\})]/.test(lastChar)) {
-                        base = lastChar;
-                        baseStartIdx = result.length - 1;
+        while (changed && iterations < maxIterations) {
+            changed = false;
+            iterations++;
+
+            let result = '';
+            let i = 0;
+            while (i < current.length) {
+                // Look for pattern: ^(
+                if (current[i] === '^' && i + 1 < current.length && current[i + 1] === '(') {
+                    // Check what precedes - could be a single char OR a placeholder like __PH0__
+                    let base = '';
+                    let baseStartIdx = result.length;
+
+                    // Check for placeholder ending: __PH\d+__
+                    const placeholderMatch = result.match(/__PH(\d+)__$/);
+                    if (placeholderMatch) {
+                        base = placeholderMatch[0];
+                        baseStartIdx = result.length - base.length;
+                    } else if (result.length > 0) {
+                        // Single character base or closing paren/brace
+                        const lastChar = result[result.length - 1];
+                        if (/[a-zA-Z0-9\})]/.test(lastChar)) {
+                            base = lastChar;
+                            baseStartIdx = result.length - 1;
+                        }
+                    }
+
+                    if (base) {
+                        // Find matching closing parenthesis
+                        let depth = 1;
+                        let j = i + 2;
+                        while (j < current.length && depth > 0) {
+                            if (current[j] === '(') depth++;
+                            else if (current[j] === ')') depth--;
+                            j++;
+                        }
+                        if (depth === 0) {
+                            // Extract content between parentheses
+                            const exponentContent = current.substring(i + 2, j - 1);
+                            // Process fractions first, then other content
+                            let processedExponent = processFractionsInContent(exponentContent);
+                            processedExponent = processContent(processedExponent);
+                            // Remove the base and add placeholder with full superscript
+                            result = result.substring(0, baseStartIdx);
+                            result += addPlaceholder(`${base}^{${processedExponent}}`);
+                            i = j;
+                            changed = true;
+                            continue;
+                        }
                     }
                 }
-
-                if (base) {
-                    // Find matching closing parenthesis
-                    let depth = 1;
-                    let j = i + 2;
-                    while (j < line.length && depth > 0) {
-                        if (line[j] === '(') depth++;
-                        else if (line[j] === ')') depth--;
-                        j++;
-                    }
-                    if (depth === 0) {
-                        // Extract content between parentheses
-                        const exponentContent = line.substring(i + 2, j - 1);
-                        // Process fractions first, then other content
-                        let processedExponent = processFractionsInContent(exponentContent);
-                        processedExponent = processContent(processedExponent);
-                        // Remove the base and add placeholder with full superscript
-                        result = result.substring(0, baseStartIdx);
-                        result += addPlaceholder(`${base}^{${processedExponent}}`);
-                        i = j;
-                        continue;
-                    }
-                }
+                result += current[i];
+                i++;
             }
-            result += line[i];
-            i++;
+            current = result;
         }
-        return result;
+        return current;
     };
     processedLine = handleParenthesizedExponent(processedLine);
 
@@ -667,16 +680,18 @@ export const compileMathScript = (input: string): CompilationResult => {
 
     // Handle placeholder followed by simple exponent: __PH0__^2 -> wrap in new placeholder
     // This handles chained exponents like x^(1/n)^2
-    processedLine = processedLine.replace(/(__PH\d+__)\^(\{[^}]+\}|\([^)]+\)|[a-zA-Z0-9]+)/g, (_, placeholder, exp) => {
-        // If exp is already wrapped in {} or (), extract content; otherwise wrap it
-        let exponentContent = exp;
-        if (exp.startsWith('{') && exp.endsWith('}')) {
-            exponentContent = exp.slice(1, -1);
-        } else if (exp.startsWith('(') && exp.endsWith(')')) {
-            exponentContent = exp.slice(1, -1);
-        }
-        return addPlaceholder(`{${placeholder}}^{${exponentContent}}`);
-    });
+    let prevLine = '';
+    while (prevLine !== processedLine) {
+        prevLine = processedLine;
+        processedLine = processedLine.replace(/(__PH\d+__)\^(\{[^}]+\}|[a-zA-Z0-9]+)/g, (_, placeholder, exp) => {
+            // If exp is already wrapped in {}, extract content; otherwise use as-is
+            let exponentContent = exp;
+            if (exp.startsWith('{') && exp.endsWith('}')) {
+                exponentContent = exp.slice(1, -1);
+            }
+            return addPlaceholder(`{${placeholder}}^{${exponentContent}}`);
+        });
+    }
 
     // NOTE: Math.pi replacement happens AFTER placeholder restoration (see end of function)
     // This ensures symbols inside function arguments get properly replaced
