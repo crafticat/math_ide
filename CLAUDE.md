@@ -5,9 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-npm install    # Install dependencies
-npm run dev    # Start development server (http://localhost:3000)
-npm run build  # Build for production
+npm install          # Install dependencies
+npm run dev          # Start development server (http://localhost:3000)
+npm run build        # Build for production
+node test-advanced.mjs  # Run 100 compiler test cases
 ```
 
 ## Architecture
