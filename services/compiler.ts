@@ -15,6 +15,7 @@ export const compileMathScript = (input: string): CompilationResult => {
   // 1. Math Keywords (Reserved words that are ALWAYS math/symbols)
   const mathKeywords = new Set([
       'integral', 'sum', 'lim', 'sup', 'inf', 'log', 'ln', 'sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'sqrt',
+      'floor', 'ceil',
       'exists', 'forall', 'in', 'notin', 'subset', 'union', 'intersect', 'implies', 'iff', 'suchthat',
       'AND', 'OR', 'NOT', 'and', 'or', 'not',
       'delta', 'alpha', 'beta', 'gamma', 'epsilon', 'theta', 'lambda', 'sigma', 'omega', 'pi', 'mu', 'phi', 'rho', 'tau', 'zeta', 'eta', 'chi', 'psi', 'nu', 'kappa', 'iota', 'xi', 'upsilon',
@@ -447,6 +448,19 @@ export const compileMathScript = (input: string): CompilationResult => {
         return result;
     };
 
+    // Floor: floor(x) -> \lfloor x \rfloor (with nested paren support)
+    // Process BEFORE trig functions so floor() inside cos() works
+    processedLine = handleFunctionCall(processedLine, 'floor', (content) => {
+        let processedInner = processFractionsInContent(content);
+        return addPlaceholder(`\\lfloor ${processContent(processedInner)} \\rfloor`);
+    });
+
+    // Ceil: ceil(x) -> \lceil x \rceil (with nested paren support)
+    processedLine = handleFunctionCall(processedLine, 'ceil', (content) => {
+        let processedInner = processFractionsInContent(content);
+        return addPlaceholder(`\\lceil ${processContent(processedInner)} \\rceil`);
+    });
+
     // Trig and other functions: sin(x) -> \sin(x), cos(x) -> \cos(x), etc.
     // NOTE: We need to process fractions INSIDE the function content before wrapping
     const mathFunctions = ['sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'arcsin', 'arccos', 'arctan', 'sinh', 'cosh', 'tanh', 'log', 'ln', 'exp'];
@@ -634,16 +648,29 @@ export const compileMathScript = (input: string): CompilationResult => {
                         base = placeholderMatch[0];
                         baseStartIdx = result.length - base.length;
                     } else if (result.length > 0) {
-                        // Single character base or closing paren/brace
                         const lastChar = result[result.length - 1];
-                        if (/[a-zA-Z0-9\})]/.test(lastChar)) {
+                        // If base is ), find the matching ( and capture the entire parenthesized expression
+                        if (lastChar === ')') {
+                            let parenDepth = 1;
+                            let k = result.length - 2;
+                            while (k >= 0 && parenDepth > 0) {
+                                if (result[k] === ')') parenDepth++;
+                                else if (result[k] === '(') parenDepth--;
+                                k--;
+                            }
+                            if (parenDepth === 0) {
+                                // k+1 is the position of the matching (
+                                base = result.substring(k + 1);
+                                baseStartIdx = k + 1;
+                            }
+                        } else if (/[a-zA-Z0-9\}]/.test(lastChar)) {
                             base = lastChar;
                             baseStartIdx = result.length - 1;
                         }
                     }
 
                     if (base) {
-                        // Find matching closing parenthesis
+                        // Find matching closing parenthesis for the exponent
                         let depth = 1;
                         let j = i + 2;
                         while (j < current.length && depth > 0) {
@@ -659,7 +686,10 @@ export const compileMathScript = (input: string): CompilationResult => {
                             processedExponent = processContent(processedExponent);
                             // Remove the base and add placeholder with full superscript
                             result = result.substring(0, baseStartIdx);
-                            result += addPlaceholder(`${base}^{${processedExponent}}`);
+                            // Wrap placeholder bases in braces for proper chained exponent nesting
+                            // e.g., __PH0__^{b} should become {__PH0__}^{b} so it renders as {x^{a}}^{b}
+                            const wrappedBase = base.startsWith('__PH') ? `{${base}}` : base;
+                            result += addPlaceholder(`${wrappedBase}^{${processedExponent}}`);
                             i = j;
                             changed = true;
                             continue;

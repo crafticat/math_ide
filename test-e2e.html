@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Compiler E2E Test</title>
+    <script type="module">
+        // Import the compiler
+        import { compileMathScript } from './services/compiler.ts';
+        
+        const testCases = [
+            { input: 'factorial(n)', expected: 'n!' },
+            { input: 'factorial(j-1)', expected: '(j-1)!' },
+            { input: 'cos(Math.pi)', expected: '\\cos(\\pi)' },
+            { input: 'cos(2*Math.pi)', expected: '\\cos(\\frac{2}{\\pi})' },  // or 2\pi depending on interpretation
+            { input: 'cos(Math.pi * (factorial(j-1) + 1)/j)', expected: '\\cos(\\frac{\\pi \\cdot ((j-1)! + 1)}{j})' },
+            { input: 'sin(factorial(n+1))', expected: '\\sin((n+1)!)' },
+            { input: '(factorial(n) + 1)/(factorial(n) - 1)', expected: '\\frac{n! + 1}{n! - 1}' },
+            { input: 'sqrt(factorial(n))', expected: '\\sqrt{n!}' },
+            { input: 'a/b', expected: '\\frac{a}{b}' },
+            { input: '(a+b)/c', expected: '\\frac{a+b}{c}' },
+            { input: 'Math.pi/2', expected: '\\frac{\\pi}{2}' },
+        ];
+        
+        console.log('=== E2E Compiler Tests ===\n');
+        
+        testCases.forEach((tc, i) => {
+            const result = compileMathScript(tc.input);
+            const latex = result.latexLines[0]?.latex || 'NO OUTPUT';
+            console.log(`Test ${i+1}: ${tc.input}`);
+            console.log(`  Result: ${latex}`);
+            console.log(`  Expected: ${tc.expected}`);
+            console.log('');
+        });
+    </script>
+</head>
+<body>
+    <h1>Check browser console for test results</h1>
+</body>
+</html>

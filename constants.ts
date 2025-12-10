@@ -241,6 +241,8 @@ export const AUTOCOMPLETE_DATA = [
     { label: 'frac', type: 'function', insert: '($0)/()' },
     { label: 'factorial', type: 'function', insert: 'factorial($0)' },
     { label: 'choose', type: 'function', insert: 'choose($0, )' },
+    { label: 'floor', type: 'function', insert: 'floor($0)' },
+    { label: 'ceil', type: 'function', insert: 'ceil($0)' },
     
     // Set Theory
     { label: 'in', type: 'operator', insert: 'in' },

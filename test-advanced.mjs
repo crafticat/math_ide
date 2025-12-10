@@ -177,7 +177,20 @@ const handleParenthesizedExponent = (line) => {
           baseStartIdx = result.length - base.length;
         } else if (result.length > 0) {
           const lastChar = result[result.length - 1];
-          if (/[a-zA-Z0-9\})]/.test(lastChar)) {
+          // If base is ), find the matching ( and capture the entire parenthesized expression
+          if (lastChar === ')') {
+            let parenDepth = 1;
+            let k = result.length - 2;
+            while (k >= 0 && parenDepth > 0) {
+              if (result[k] === ')') parenDepth++;
+              else if (result[k] === '(') parenDepth--;
+              k--;
+            }
+            if (parenDepth === 0) {
+              base = result.substring(k + 1);
+              baseStartIdx = k + 1;
+            }
+          } else if (/[a-zA-Z0-9\}]/.test(lastChar)) {
             base = lastChar;
             baseStartIdx = result.length - 1;
           }
@@ -196,7 +209,9 @@ const handleParenthesizedExponent = (line) => {
             let processedExponent = processFractionsInContent(exponentContent);
             processedExponent = processContent(processedExponent);
             result = result.substring(0, baseStartIdx);
-            result += addPlaceholder(`${base}^{${processedExponent}}`);
+            // Wrap placeholder bases in braces for proper chained exponent nesting
+            const wrappedBase = base.startsWith('__PH') ? `{${base}}` : base;
+            result += addPlaceholder(`${wrappedBase}^{${processedExponent}}`);
             i = j;
             changed = true;
             continue;
@@ -230,6 +245,24 @@ function compile(input) {
     return addPlaceholder(`${processed}!`);
   });
 
+  // Process sqrt
+  processedLine = handleFunctionCall(processedLine, 'sqrt', (content) => {
+    return addPlaceholder(`\\sqrt{${processContent(content)}}`);
+  });
+
+  // Process floor: floor(x) -> \lfloor x \rfloor
+  // Process BEFORE trig functions so floor() inside cos() works
+  processedLine = handleFunctionCall(processedLine, 'floor', (content) => {
+    let processedInner = processFractionsInContent(content);
+    return addPlaceholder(`\\lfloor ${processContent(processedInner)} \\rfloor`);
+  });
+
+  // Process ceil: ceil(x) -> \lceil x \rceil
+  processedLine = handleFunctionCall(processedLine, 'ceil', (content) => {
+    let processedInner = processFractionsInContent(content);
+    return addPlaceholder(`\\lceil ${processContent(processedInner)} \\rceil`);
+  });
+
   // Process trig functions with fraction handling
   const mathFunctions = ['sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'arcsin', 'arccos', 'arctan', 'log', 'ln', 'exp'];
   mathFunctions.forEach(fn => {
@@ -237,11 +270,6 @@ function compile(input) {
       let processedInner = processFractionsInContent(content);
       return addPlaceholder(`\\${fn}(${processContent(processedInner)})`);
     });
-  });
-
-  // Process sqrt
-  processedLine = handleFunctionCall(processedLine, 'sqrt', (content) => {
-    return addPlaceholder(`\\sqrt{${processContent(content)}}`);
   });
 
   // Process sum with bounds
@@ -498,14 +526,23 @@ const testCases = [
   { id: 92, input: 'a != b', contains: '\\neq', category: 'Operators' },
   { id: 93, input: 'a +- b', contains: '\\pm', category: 'Operators' },
 
-  // === COMPLEX EXPRESSIONS (94-100) ===
-  { id: 94, input: '((sum(j=0 -> i) cos(Math.pi * ((j-1)! + 1)/j))/i)^(1/n)', contains: '\\frac', category: 'Complex' },
-  { id: 95, input: 'lim(n -> inf) (1 + 1/n)^n = Math.e', contains: '\\lim', category: 'Complex' },
-  { id: 96, input: 'integral(0 -> inf) e^(-x^2) dx = sqrt(Math.pi)/2', contains: '\\int', category: 'Complex' },
-  { id: 97, input: 'sum(n=0 -> inf) x^n/factorial(n) = e^x', contains: '\\sum', category: 'Complex' },
-  { id: 98, input: 'choose(n, k) = factorial(n)/(factorial(k)*factorial(n-k))', contains: '\\binom', category: 'Complex' },
-  { id: 99, input: 'sin(x)^2 + cos(x)^2 = 1', contains: '\\sin', category: 'Complex' },
-  { id: 100, input: '((a+b)/(c+d))^(1/n)^(x_i)', contains: '^{x_{i}}', category: 'Complex' },
+  // === FLOOR/CEIL (94-100) ===
+  { id: 94, input: 'floor(x)', contains: '\\lfloor x \\rfloor', category: 'Floor/Ceil' },
+  { id: 95, input: 'ceil(y)', contains: '\\lceil y \\rceil', category: 'Floor/Ceil' },
+  { id: 96, input: 'floor(x/2)', contains: '\\lfloor', category: 'Floor/Ceil' },
+  { id: 97, input: 'ceil(n + 0.5)', contains: '\\lceil', category: 'Floor/Ceil' },
+  { id: 98, input: 'floor((j-1)! + 1)', contains: '\\lfloor (j-1)! + 1 \\rfloor', category: 'Floor/Ceil' },
+  { id: 99, input: 'floor(x) + ceil(y)', contains: '\\lfloor', category: 'Floor/Ceil' },
+  { id: 100, input: '((sum(j=0 -> i) cos(Math.pi * floor((j-1)!  + 1)/j))/i)^(1/n)^(x_i)', contains: '\\lfloor', category: 'Floor/Ceil' },
+
+  // === COMPLEX EXPRESSIONS (101-107) ===
+  { id: 101, input: '((sum(j=0 -> i) cos(Math.pi * ((j-1)! + 1)/j))/i)^(1/n)', contains: '\\frac', category: 'Complex' },
+  { id: 102, input: 'lim(n -> inf) (1 + 1/n)^n = Math.e', contains: '\\lim', category: 'Complex' },
+  { id: 103, input: 'integral(0 -> inf) e^(-x^2) dx = sqrt(Math.pi)/2', contains: '\\int', category: 'Complex' },
+  { id: 104, input: 'sum(n=0 -> inf) x^n/factorial(n) = e^x', contains: '\\sum', category: 'Complex' },
+  { id: 105, input: 'choose(n, k) = factorial(n)/(factorial(k)*factorial(n-k))', contains: '\\binom', category: 'Complex' },
+  { id: 106, input: 'sin(x)^2 + cos(x)^2 = 1', contains: '\\sin', category: 'Complex' },
+  { id: 107, input: '((a+b)/(c+d))^(1/n)^(x_i)', contains: '^{x_{i}}', category: 'Complex' },
 ];
 
 // ============================================
@@ -515,7 +552,7 @@ const testCases = [
 function runTests() {
   console.log('╔══════════════════════════════════════════════════════════════╗');
   console.log('║       MathScript Compiler - Advanced Test Suite              ║');
-  console.log('║                    100 Test Cases                            ║');
+  console.log('║                    107 Test Cases                            ║');
   console.log('╚══════════════════════════════════════════════════════════════╝\n');
 
   let passed = 0;
