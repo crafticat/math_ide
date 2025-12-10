@@ -205,16 +205,21 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
           if (e.key === 'ArrowDown') {
               e.preventDefault();
               setSelectedIndex(prev => (prev + 1) % suggestions.length);
+              return;
           } else if (e.key === 'ArrowUp') {
               e.preventDefault();
               setSelectedIndex(prev => (prev - 1 + suggestions.length) % suggestions.length);
+              return;
           } else if (e.key === 'Enter' || e.key === 'Tab') {
               e.preventDefault();
               insertSuggestion(suggestions[selectedIndex]);
+              return;
           } else if (e.key === 'Escape') {
               setShowSuggestions(false);
+              return;
           }
-          return;
+          // For other keys (including brackets), close suggestions and continue processing
+          setShowSuggestions(false);
       }
 
       // Bracket handling (wrap selection or auto-close)
@@ -278,11 +283,30 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
           }
       }
 
+      // Symmetric quotes (', ", `) need special handling
+      const symmetricQuotes = new Set(["'", '"', '`']);
+
       if (bracketPairs[e.key]) {
-          e.preventDefault();
           const textarea = e.currentTarget;
           const openBracket = e.key;
           const closeBracket = bracketPairs[e.key];
+
+          // For symmetric quotes, check if we should auto-close
+          if (symmetricQuotes.has(e.key) && !hasSelection) {
+              const charBefore = selectionStart > 0 ? content[selectionStart - 1] : '';
+              const charAfter = content[selectionStart] || '';
+
+              // Don't auto-close if:
+              // 1. Previous char is alphanumeric (like in contractions: don't, it's)
+              // 2. Next char is already the same quote (would create triple)
+              // 3. We're inside a word
+              if (/[a-zA-Z0-9]/.test(charBefore) || charAfter === e.key) {
+                  // Let the default behavior happen (just insert the quote)
+                  return;
+              }
+          }
+
+          e.preventDefault();
 
           if (hasSelection) {
               // Wrap selection with brackets
