@@ -236,11 +236,11 @@ export const AUTOCOMPLETE_DATA = [
     { label: 'Corollary', type: 'keyword', insert: 'Corollary $0 {\n  \n}', cursorOffset: -5 },
     { label: 'Proposition', type: 'keyword', insert: 'Proposition $0 {\n  \n}', cursorOffset: -5 },
     { label: 'Case', type: 'keyword', insert: 'Case $0 {\n  \n}', cursorOffset: -5 },
-    // Italic scopes (informal/supporting)
+    // Italic scopes (informal/supporting) - cursor inside braces
     { label: 'Proof', type: 'keyword', insert: 'Proof {\n  $0\n}', cursorOffset: -2 },
-    { label: 'Claim', type: 'keyword', insert: 'Claim $0 {\n  \n}', cursorOffset: -5 },
-    { label: 'Remark', type: 'keyword', insert: 'Remark $0 {\n  \n}', cursorOffset: -5 },
-    { label: 'Example', type: 'keyword', insert: 'Example $0 {\n  \n}', cursorOffset: -5 },
+    { label: 'Claim', type: 'keyword', insert: 'Claim {\n  $0\n}', cursorOffset: -2 },
+    { label: 'Remark', type: 'keyword', insert: 'Remark {\n  $0\n}', cursorOffset: -2 },
+    { label: 'Example', type: 'keyword', insert: 'Example {\n  $0\n}', cursorOffset: -2 },
     { label: 'Let', type: 'keyword', insert: 'Let $0' },
 
     // Logic Symbols
