@@ -7,6 +7,8 @@ import { Console } from './components/Console';
 import { MenuBar } from './components/menus/MenuBar';
 import { FileDialog } from './components/modals/FileDialog';
 import { FindReplaceDialog } from './components/modals/FindReplaceDialog';
+import { SyntaxHelpDialog } from './components/modals/SyntaxHelpDialog';
+import { ExportDialog, ExportOptions } from './components/modals/ExportDialog';
 import { compileMathScript } from './services/compiler';
 import { INITIAL_CONTENT, DEFAULT_FILE_CONTENT, DARK_THEME, LIGHT_THEME } from './constants';
 import { FileNode, CompilationResult, AppSettings } from './types';
@@ -15,7 +17,7 @@ import {
   loadSettings, saveSettings, generateFileId, findFileById, updateFileContent,
   addFile, removeFile, getAllFiles, generateUniqueFileName
 } from './services/storage';
-import { Play, FileDown, Code, Eye, X, Circle } from 'lucide-react';
+import { Play, FileDown, Code, Eye, X, Circle, HelpCircle } from 'lucide-react';
 
 export default function App() {
   // File state
@@ -27,6 +29,7 @@ export default function App() {
   // Editor content
   const [content, setContent] = useState<string>('');
   const [compilationResult, setCompilationResult] = useState<CompilationResult>({ latexLines: [], logs: [], macros: {} });
+  const [cursorLine, setCursorLine] = useState<number>(1);
 
   // UI State
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
@@ -35,6 +38,8 @@ export default function App() {
   // Dialogs
   const [dialogType, setDialogType] = useState<'new' | 'saveAs' | 'delete' | null>(null);
   const [findDialogMode, setFindDialogMode] = useState<'find' | 'replace' | null>(null);
+  const [showSyntaxHelp, setShowSyntaxHelp] = useState(false);
+  const [showExportDialog, setShowExportDialog] = useState(false);
 
   // Refs
   const editorRef = useRef<HTMLTextAreaElement>(null);
@@ -334,28 +339,46 @@ export default function App() {
       handleToggleSidebar, handleToggleConsole, handleTogglePreview,
       handleZoomIn, handleZoomOut, handleResetZoom]);
 
-  const handleExportPdf = () => {
+  const handleExportPdf = (options: ExportOptions) => {
+    setShowExportDialog(false);
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
-    const htmlContent = compilationResult.latexLines.map(line => {
+    const htmlContent = compilationResult.latexLines.map((line, idx) => {
       try {
-        return window.katex.renderToString(line.latex, {
+        const rendered = window.katex.renderToString(line.latex, {
           displayMode: true,
           throwOnError: false,
           fleqn: true
         });
+        if (options.showLineNumbers) {
+          return `<div class="equation-row"><span class="eq-num">(${idx + 1})</span><div class="eq-content">${rendered}</div></div>`;
+        }
+        return rendered;
       } catch(e) { return ''; }
     }).join('<div style="margin-bottom: 5px;"></div>');
+
+    const headerHtml = (options.title || options.author || options.date) ? `
+      <div class="doc-header">
+        ${options.title ? `<h1 class="doc-title">${options.title}</h1>` : ''}
+        ${(options.author || options.date) ? `
+          <div class="doc-meta">
+            ${options.author ? `<span class="doc-author">${options.author}</span>` : ''}
+            ${options.author && options.date ? '<span class="doc-sep">&mdash;</span>' : ''}
+            ${options.date ? `<span class="doc-date">${options.date}</span>` : ''}
+          </div>
+        ` : ''}
+      </div>
+    ` : '';
 
     printWindow.document.write(`
       <html>
         <head>
-          <title>Mathematical Document</title>
+          <title>${options.title || 'Mathematical Document'}</title>
           <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
           <style>
             @page {
-              margin: 0.5in;
+              margin: 0.75in;
               size: auto;
             }
             @media print {
@@ -371,6 +394,23 @@ export default function App() {
               max-width: 900px;
               margin: 0 auto;
             }
+            .doc-header {
+              margin-bottom: 40px;
+              text-align: center;
+            }
+            .doc-title {
+              font-size: 24px;
+              font-weight: normal;
+              margin: 0 0 12px 0;
+              border-bottom: none;
+            }
+            .doc-meta {
+              font-size: 14px;
+              color: #444;
+            }
+            .doc-sep {
+              margin: 0 8px;
+            }
             .katex { font-size: 1.1em; }
             .katex-display {
               text-align: left !important;
@@ -383,9 +423,26 @@ export default function App() {
             .katex-display > .katex > .katex-html {
               width: 100%;
             }
+            .equation-row {
+              display: flex;
+              align-items: center;
+              margin-bottom: 5px;
+            }
+            .eq-num {
+              flex-shrink: 0;
+              width: 50px;
+              text-align: right;
+              padding-right: 15px;
+              font-size: 12px;
+              color: #666;
+            }
+            .eq-content {
+              flex: 1;
+            }
           </style>
         </head>
         <body>
+          ${headerHtml}
           ${htmlContent}
           <script>
             window.onload = function() { window.print(); }
@@ -482,7 +539,27 @@ export default function App() {
         />
         <div className="flex items-center gap-2">
           <button
-            onClick={handleExportPdf}
+            onClick={() => setShowSyntaxHelp(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded transition-all"
+            style={{
+              color: themeColors.textDim,
+              border: `1px solid ${themeColors.border}`
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = themeColors.menuHover;
+              e.currentTarget.style.borderColor = themeColors.borderStrong || themeColors.border;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+              e.currentTarget.style.borderColor = themeColors.border;
+            }}
+            title="Syntax Reference"
+          >
+            <HelpCircle size={14} />
+            <span>Help</span>
+          </button>
+          <button
+            onClick={() => setShowExportDialog(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded transition-all"
             style={{
               color: themeColors.textDim,
@@ -598,6 +675,7 @@ export default function App() {
                 zoom={editorZoom}
                 theme={theme}
                 editorRef={editorRef}
+                onCursorLineChange={setCursorLine}
               />
             </div>
 
@@ -641,7 +719,7 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                  <Preview latexLines={compilationResult.latexLines} theme={theme} />
+                  <Preview latexLines={compilationResult.latexLines} theme={theme} highlightLine={cursorLine} />
                 </div>
               </>
             )}
@@ -709,6 +787,21 @@ export default function App() {
         onSubmit={handleDialogSubmit}
         defaultValue={dialogType === 'saveAs' ? activeFileName : 'untitled.math'}
         fileName={activeFileName}
+        theme={theme}
+      />
+
+      {/* Syntax Help Dialog */}
+      <SyntaxHelpDialog
+        isOpen={showSyntaxHelp}
+        onClose={() => setShowSyntaxHelp(false)}
+        theme={theme}
+      />
+
+      {/* Export Dialog */}
+      <ExportDialog
+        isOpen={showExportDialog}
+        onClose={() => setShowExportDialog(false)}
+        onExport={handleExportPdf}
         theme={theme}
       />
     </div>

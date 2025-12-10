@@ -605,15 +605,34 @@ export const compileMathScript = (input: string): CompilationResult => {
     processedLine = handleParenthesizedSubscript(processedLine);
 
     // Superscripts with parenthesized content: e^(i * pi) -> e^{i * pi}
+    // Also handles fractions in exponents: x^(1/n) -> x^{\frac{1}{n}}
+    // Handles placeholders: __PH0__^(1/n) -> placeholder with exponent
     // Use a function to handle nested parentheses properly
     const handleParenthesizedExponent = (line: string): string => {
         let result = '';
         let i = 0;
         while (i < line.length) {
-            // Look for pattern: char^(
-            if (i > 0 && line[i] === '^' && line[i + 1] === '(') {
-                const baseChar = result[result.length - 1];
-                if (/[a-zA-Z0-9\}]/.test(baseChar)) {
+            // Look for pattern: ^(
+            if (line[i] === '^' && line[i + 1] === '(') {
+                // Check what precedes - could be a single char OR a placeholder like __PH0__
+                let base = '';
+                let baseStartIdx = result.length;
+
+                // Check for placeholder ending: __PH\d+__
+                const placeholderMatch = result.match(/__PH(\d+)__$/);
+                if (placeholderMatch) {
+                    base = placeholderMatch[0];
+                    baseStartIdx = result.length - base.length;
+                } else if (result.length > 0) {
+                    // Single character base
+                    const lastChar = result[result.length - 1];
+                    if (/[a-zA-Z0-9\})]/.test(lastChar)) {
+                        base = lastChar;
+                        baseStartIdx = result.length - 1;
+                    }
+                }
+
+                if (base) {
                     // Find matching closing parenthesis
                     let depth = 1;
                     let j = i + 2;
@@ -625,11 +644,12 @@ export const compileMathScript = (input: string): CompilationResult => {
                     if (depth === 0) {
                         // Extract content between parentheses
                         const exponentContent = line.substring(i + 2, j - 1);
-                        // Process the content recursively for any nested constructs
-                        const processedExponent = processContent(exponentContent);
-                        // Remove the base character and add placeholder with full superscript
-                        result = result.slice(0, -1);
-                        result += addPlaceholder(`${baseChar}^{${processedExponent}}`);
+                        // Process fractions first, then other content
+                        let processedExponent = processFractionsInContent(exponentContent);
+                        processedExponent = processContent(processedExponent);
+                        // Remove the base and add placeholder with full superscript
+                        result = result.substring(0, baseStartIdx);
+                        result += addPlaceholder(`${base}^{${processedExponent}}`);
                         i = j;
                         continue;
                     }
@@ -644,6 +664,19 @@ export const compileMathScript = (input: string): CompilationResult => {
 
     // Superscripts: x^2 -> x^{2} (simple alphanumeric exponents)
     processedLine = processedLine.replace(/([a-zA-Z0-9\}])\^([a-zA-Z0-9]+)(?![{}])/g, '$1^{$2}');
+
+    // Handle placeholder followed by simple exponent: __PH0__^2 -> wrap in new placeholder
+    // This handles chained exponents like x^(1/n)^2
+    processedLine = processedLine.replace(/(__PH\d+__)\^(\{[^}]+\}|\([^)]+\)|[a-zA-Z0-9]+)/g, (_, placeholder, exp) => {
+        // If exp is already wrapped in {} or (), extract content; otherwise wrap it
+        let exponentContent = exp;
+        if (exp.startsWith('{') && exp.endsWith('}')) {
+            exponentContent = exp.slice(1, -1);
+        } else if (exp.startsWith('(') && exp.endsWith(')')) {
+            exponentContent = exp.slice(1, -1);
+        }
+        return addPlaceholder(`{${placeholder}}^{${exponentContent}}`);
+    });
 
     // NOTE: Math.pi replacement happens AFTER placeholder restoration (see end of function)
     // This ensures symbols inside function arguments get properly replaced

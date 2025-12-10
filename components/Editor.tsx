@@ -9,9 +9,10 @@ interface EditorProps {
   zoom?: number;
   theme?: 'dark' | 'light';
   editorRef?: RefObject<HTMLTextAreaElement>;
+  onCursorLineChange?: (line: number) => void;
 }
 
-export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, theme = 'dark', editorRef }) => {
+export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, theme = 'dark', editorRef, onCursorLineChange }) => {
   const internalRef = useRef<HTMLTextAreaElement>(null);
   const textareaRef = editorRef || internalRef;
   const preRef = useRef<HTMLPreElement>(null);
@@ -26,6 +27,10 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
   const [scrollTop, setScrollTop] = useState(0);
   const [scrollLeft, setScrollLeft] = useState(0);
 
+  // Bracket matching state
+  const [matchingBracket, setMatchingBracket] = useState<{ open: number; close: number } | null>(null);
+  const [cursorLine, setCursorLine] = useState(1);
+
   const handleScroll = (e: React.UIEvent<HTMLTextAreaElement>) => {
     const newScrollTop = e.currentTarget.scrollTop;
     const newScrollLeft = e.currentTarget.scrollLeft;
@@ -35,6 +40,83 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
     setShowSuggestions(false);
   };
 
+  // Bracket matching pairs
+  const bracketMatchPairs: Record<string, string> = {
+    '(': ')', ')': '(',
+    '[': ']', ']': '[',
+    '{': '}', '}': '{',
+  };
+  const openBrackets = new Set(['(', '[', '{']);
+  const closeBrackets = new Set([')', ']', '}']);
+
+  // Find matching bracket
+  const findMatchingBracket = (text: string, pos: number): { open: number; close: number } | null => {
+    const char = text[pos];
+    if (!char || !bracketMatchPairs[char]) return null;
+
+    const isOpen = openBrackets.has(char);
+    const targetBracket = bracketMatchPairs[char];
+    let depth = 1;
+
+    if (isOpen) {
+      // Search forward for closing bracket
+      for (let i = pos + 1; i < text.length; i++) {
+        if (text[i] === char) depth++;
+        else if (text[i] === targetBracket) {
+          depth--;
+          if (depth === 0) return { open: pos, close: i };
+        }
+      }
+    } else {
+      // Search backward for opening bracket
+      for (let i = pos - 1; i >= 0; i--) {
+        if (text[i] === char) depth++;
+        else if (text[i] === targetBracket) {
+          depth--;
+          if (depth === 0) return { open: i, close: pos };
+        }
+      }
+    }
+    return null;
+  };
+
+  // Update cursor position tracking
+  const handleCursorChange = () => {
+    if (!textareaRef.current) return;
+    const pos = textareaRef.current.selectionStart;
+
+    // Calculate current line number
+    const textBeforeCursor = content.substring(0, pos);
+    const line = textBeforeCursor.split('\n').length;
+
+    if (line !== cursorLine) {
+      setCursorLine(line);
+      onCursorLineChange?.(line);
+    }
+
+    // Check for bracket matching
+    // Check character at cursor and character before cursor
+    let match = findMatchingBracket(content, pos);
+    if (!match && pos > 0) {
+      match = findMatchingBracket(content, pos - 1);
+    }
+    setMatchingBracket(match);
+  };
+
+  // Track cursor changes
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    const handleSelectionChange = () => {
+      if (document.activeElement === textarea) {
+        handleCursorChange();
+      }
+    };
+
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => document.removeEventListener('selectionchange', handleSelectionChange);
+  }, [content, cursorLine]);
 
   // Helper to insert text while preserving undo history
   const insertTextWithUndo = (textarea: HTMLTextAreaElement, text: string, selectStart?: number, selectEnd?: number) => {
@@ -386,6 +468,17 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
       const val = e.target.value;
       onChange(val);
       updateSuggestions(val, e.target.selectionEnd);
+      handleCursorChange();
+  };
+
+  // Calculate position (line, column) from character index
+  const getPositionFromIndex = (index: number): { line: number; col: number } => {
+    const textBefore = content.substring(0, index);
+    const lines = textBefore.split('\n');
+    return {
+      line: lines.length - 1,
+      col: lines[lines.length - 1].length,
+    };
   };
 
   const highlightCode = (code: string) => {
@@ -607,6 +700,37 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
                />
             </div>
          </div>
+
+         {/* Bracket Matching Highlights */}
+         {matchingBracket && (
+           <div
+             className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none"
+             style={{ padding: `${containerPadding}px` }}
+           >
+             <div style={{ transform: `translate(-${scrollLeft}px, -${scrollTop}px)` }}>
+               {[matchingBracket.open, matchingBracket.close].map((idx) => {
+                 const pos = getPositionFromIndex(idx);
+                 // Calculate character width (approximately)
+                 const charWidth = fontSize * 0.6; // Monospace approximate
+                 return (
+                   <div
+                     key={idx}
+                     className="absolute rounded-sm"
+                     style={{
+                       top: pos.line * lineHeight,
+                       left: pos.col * charWidth,
+                       width: charWidth,
+                       height: lineHeight,
+                       backgroundColor: theme === 'dark' ? 'rgba(255, 215, 0, 0.25)' : 'rgba(255, 200, 0, 0.35)',
+                       border: `1px solid ${theme === 'dark' ? 'rgba(255, 215, 0, 0.5)' : 'rgba(200, 150, 0, 0.6)'}`,
+                       boxSizing: 'border-box',
+                     }}
+                   />
+                 );
+               })}
+             </div>
+           </div>
+         )}
 
          {/* Input Textarea - transparent text, visible caret */}
          <textarea

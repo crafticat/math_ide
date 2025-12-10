@@ -13,18 +13,28 @@ declare global {
 interface PreviewProps {
   latexLines: { id: string; latex: string; originalLine: number }[];
   theme?: 'dark' | 'light';
+  highlightLine?: number;
 }
 
 interface EquationBlockProps {
   latex: string;
   lineNumber: number;
   theme: 'dark' | 'light';
+  isHighlighted?: boolean;
 }
 
-const EquationBlock: React.FC<EquationBlockProps> = ({ latex, lineNumber, theme }) => {
+const EquationBlock: React.FC<EquationBlockProps> = ({ latex, lineNumber, theme, isHighlighted }) => {
     const ref = useRef<HTMLDivElement>(null);
+    const blockRef = useRef<HTMLDivElement>(null);
     const [error, setError] = useState<string | null>(null);
     const colors = theme === 'dark' ? DARK_THEME : LIGHT_THEME;
+
+    // Scroll into view when highlighted
+    useEffect(() => {
+        if (isHighlighted && blockRef.current) {
+            blockRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    }, [isHighlighted]);
 
     useEffect(() => {
         if (!ref.current || !window.katex) return;
@@ -66,14 +76,31 @@ const EquationBlock: React.FC<EquationBlockProps> = ({ latex, lineNumber, theme 
 
     return (
         <div
+            ref={blockRef}
             className="group flex items-start rounded transition-colors duration-150"
-            style={{ backgroundColor: 'transparent' }}
-            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = colors.activeItem}
-            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+            style={{
+                backgroundColor: isHighlighted
+                    ? (theme === 'dark' ? 'rgba(200, 160, 100, 0.15)' : 'rgba(200, 160, 100, 0.2)')
+                    : 'transparent',
+                borderLeft: isHighlighted
+                    ? `2px solid ${colors.accent}`
+                    : '2px solid transparent',
+                paddingLeft: '4px',
+                marginLeft: '-6px',
+            }}
+            onMouseEnter={(e) => {
+                if (!isHighlighted) e.currentTarget.style.backgroundColor = colors.activeItem;
+            }}
+            onMouseLeave={(e) => {
+                if (!isHighlighted) e.currentTarget.style.backgroundColor = 'transparent';
+            }}
         >
             <div
-                className="flex-shrink-0 w-8 pt-2 text-[10px] font-mono text-right pr-2 select-none opacity-0 group-hover:opacity-100 transition-opacity"
-                style={{ color: colors.textDim }}
+                className="flex-shrink-0 w-8 pt-2 text-[10px] font-mono text-right pr-2 select-none transition-opacity"
+                style={{
+                    color: colors.textDim,
+                    opacity: isHighlighted ? 1 : 0,
+                }}
             >
                 {lineNumber}
             </div>
@@ -87,7 +114,7 @@ const EquationBlock: React.FC<EquationBlockProps> = ({ latex, lineNumber, theme 
     );
 };
 
-export const Preview: React.FC<PreviewProps> = ({ latexLines, theme = 'dark' }) => {
+export const Preview: React.FC<PreviewProps> = ({ latexLines, theme = 'dark', highlightLine }) => {
   const colors = theme === 'dark' ? DARK_THEME : LIGHT_THEME;
 
   return (
@@ -138,7 +165,13 @@ export const Preview: React.FC<PreviewProps> = ({ latexLines, theme = 'dark' }) 
          ) : (
              <div className="space-y-0.5">
                  {latexLines.map((line) => (
-                     <EquationBlock key={line.id} latex={line.latex} lineNumber={line.originalLine} theme={theme} />
+                     <EquationBlock
+                       key={line.id}
+                       latex={line.latex}
+                       lineNumber={line.originalLine}
+                       theme={theme}
+                       isHighlighted={highlightLine === line.originalLine}
+                     />
                  ))}
              </div>
          )}
