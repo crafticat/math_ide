@@ -12,7 +12,13 @@ export const INITIAL_CONTENT = `// MathBrain IDE - MathScript Language Demo
 
 Problem Analysis and Combinatorics {
 
-  // === CALCULUS ===
+  // === DEFINITIONS AND THEOREMS ===
+
+  Definition Continuity {
+    A function f is continuous at a point c if
+    forall eps > 0 exists del > 0 suchthat
+    |x - c| < del implies |f(x) - f(c)| < eps
+  }
 
   Theorem Fundamental Theorem of Calculus {
     Let f be continuous on [a, b]
@@ -38,6 +44,12 @@ Problem Analysis and Combinatorics {
     QED
   }
 
+  Corollary Mean Value Theorem for Integrals {
+    If f is continuous on [a, b] then
+    exists c in (a, b) suchthat
+    integral(a -> b) f(x) dx = f(c) * (b - a)
+  }
+
   // === COMBINATORICS ===
 
   Theorem Binomial Theorem {
@@ -48,23 +60,29 @@ Problem Analysis and Combinatorics {
 
   Lemma Factorial Identity {
     choose(n, k) = factorial(n) / factorial(k) / factorial(n - k)
+  }
 
-    For example: choose(5, 2) = 10
+  Example {
+    choose(5, 2) = 10
     Since factorial(5) = 120 and factorial(2) = 2 and factorial(3) = 6
   }
 
   // === LOGIC AND SETS ===
 
-  Theorem De Morgan Laws {
+  Proposition De Morgan Laws {
     Let A, B be sets
 
-    Case Complement of Union {
+    Claim First Law {
       x notin A union B <=> x notin A AND x notin B
     }
 
-    Case Complement of Intersection {
+    Claim Second Law {
       x notin A intersect B <=> x notin A OR x notin B
     }
+  }
+
+  Remark {
+    These laws extend to arbitrary unions and intersections
   }
 
   // === FAMOUS EQUATIONS ===
@@ -210,11 +228,19 @@ export const DEFAULT_FILE_CONTENT = INITIAL_CONTENT;
 
 export const AUTOCOMPLETE_DATA = [
     // Scopes / Headers - $0 marks cursor position
+    // Bold scopes (formal statements)
     { label: 'Problem', type: 'keyword', insert: 'Problem $0 {\n  \n}', cursorOffset: -5 },
     { label: 'Theorem', type: 'keyword', insert: 'Theorem $0 {\n  \n}', cursorOffset: -5 },
-    { label: 'Proof', type: 'keyword', insert: 'Proof {\n  $0\n}', cursorOffset: -2 },
-    { label: 'Case', type: 'keyword', insert: 'Case $0 {\n  \n}', cursorOffset: -5 },
     { label: 'Lemma', type: 'keyword', insert: 'Lemma $0 {\n  \n}', cursorOffset: -5 },
+    { label: 'Definition', type: 'keyword', insert: 'Definition $0 {\n  \n}', cursorOffset: -5 },
+    { label: 'Corollary', type: 'keyword', insert: 'Corollary $0 {\n  \n}', cursorOffset: -5 },
+    { label: 'Proposition', type: 'keyword', insert: 'Proposition $0 {\n  \n}', cursorOffset: -5 },
+    { label: 'Case', type: 'keyword', insert: 'Case $0 {\n  \n}', cursorOffset: -5 },
+    // Italic scopes (informal/supporting)
+    { label: 'Proof', type: 'keyword', insert: 'Proof {\n  $0\n}', cursorOffset: -2 },
+    { label: 'Claim', type: 'keyword', insert: 'Claim $0 {\n  \n}', cursorOffset: -5 },
+    { label: 'Remark', type: 'keyword', insert: 'Remark $0 {\n  \n}', cursorOffset: -5 },
+    { label: 'Example', type: 'keyword', insert: 'Example $0 {\n  \n}', cursorOffset: -5 },
     { label: 'Let', type: 'keyword', insert: 'Let $0' },
 
     // Logic Symbols

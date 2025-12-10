@@ -102,12 +102,18 @@ export const compileMathScript = (input: string): CompilationResult => {
 
     // --- SCOPE HANDLING ---
     // Regex allows trailing whitespace after {
-    const scopeMatch = processedLine.match(/^(Problem|Subproblem|Section|Part|Theorem|Proof|Case|Lemma)\s*(.*)\{\s*$/i);
+    // Includes italic scopes: Proof, Claim, Remark, Example
+    // And bold scopes: Problem, Theorem, Lemma, Definition, Corollary, Proposition
+    const scopeMatch = processedLine.match(/^(Problem|Subproblem|Section|Part|Theorem|Proof|Case|Lemma|Claim|Definition|Corollary|Proposition|Remark|Example)\s*(.*)\{\s*$/i);
     if (scopeMatch) {
         const type = scopeMatch[1];
         const title = scopeMatch[2].trim();
         const indentStr = Array(indentLevel).fill('\\quad ').join('');
-        
+
+        // Scopes that use italic styling (as per mathematical convention)
+        const italicScopes = new Set(['Proof', 'proof', 'Claim', 'claim', 'Remark', 'remark', 'Example', 'example']);
+        const useItalic = italicScopes.has(type);
+
         // Dynamic Size & Spacing based on nesting level
         let sizeCmd = '\\normalsize';
         let spaceSize = '0.5em';
@@ -127,7 +133,7 @@ export const compileMathScript = (input: string): CompilationResult => {
         } else {
             spaceSize = '0.2em';
         }
-        
+
         // Add spacer line before the header to prevent clumping
         if (index > 0) {
              outputLines.push({
@@ -137,15 +143,17 @@ export const compileMathScript = (input: string): CompilationResult => {
              });
         }
 
-        // Correct KaTeX syntax: Size command must wrap the text content, not be inside \text
-        // Use { \size \textbf{\text{...}} }
+        // Correct KaTeX syntax: Size command must wrap the text content
+        // Italic scopes use \textit{}, bold scopes use \textbf{}
+        const textCmd = useItalic ? '\\textit' : '\\textbf';
+        const titleText = title ? `${type} ${title}` : `${type}.`;
         outputLines.push({
-            id: `line-${index}`, 
-            latex: `${indentStr}{${sizeCmd} \\textbf{\\text{${type} ${title}}}}`,
+            id: `line-${index}`,
+            latex: `${indentStr}{${sizeCmd} ${textCmd}{\\text{${titleText}}}}`,
             originalLine: index + 1
         });
-        indentLevel++; 
-        return; 
+        indentLevel++;
+        return;
     }
 
     if (processedLine === '}') {
@@ -256,6 +264,217 @@ export const compileMathScript = (input: string): CompilationResult => {
         // Apply plus-minus/minus-plus
         result = result.replace(/\+-/g, '\\pm');
         result = result.replace(/-\+/g, '\\mp');
+        return result;
+    };
+
+    // Helper to find matching closing paren for nested function processing
+    const findClosingParenNested = (str: string, openIndex: number): number => {
+        let depth = 1;
+        for (let i = openIndex + 1; i < str.length; i++) {
+            if (str[i] === '(') depth++;
+            else if (str[i] === ')') {
+                depth--;
+                if (depth === 0) return i;
+            }
+        }
+        return -1;
+    };
+
+    // Helper to process nested function calls within content
+    // This handles functions like cos, sin, floor, ceil inside other functions
+    const processNestedFunctions = (content: string): string => {
+        let result = content;
+
+        // Process trig functions
+        const trigFunctions = ['sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'arcsin', 'arccos', 'arctan', 'sinh', 'cosh', 'tanh', 'log', 'ln', 'exp'];
+        trigFunctions.forEach(fn => {
+            const pattern = new RegExp(`\\b${fn}\\s*\\(`, 'g');
+            let match;
+            let newResult = '';
+            let lastIndex = 0;
+
+            while ((match = pattern.exec(result)) !== null) {
+                newResult += result.substring(lastIndex, match.index);
+                const openParen = match.index + match[0].length - 1;
+                const closeParen = findClosingParenNested(result, openParen);
+
+                if (closeParen !== -1) {
+                    const innerContent = result.substring(openParen + 1, closeParen);
+                    // Recursively process inner content
+                    const processedInner = processNestedFunctions(innerContent);
+                    newResult += addPlaceholder(`\\${fn}(${processedInner})`);
+                    lastIndex = closeParen + 1;
+                    pattern.lastIndex = closeParen + 1;
+                } else {
+                    newResult += match[0];
+                    lastIndex = match.index + match[0].length;
+                }
+            }
+            newResult += result.substring(lastIndex);
+            result = newResult;
+        });
+
+        // Process floor
+        {
+            const pattern = /\bfloor\s*\(/g;
+            let match;
+            let newResult = '';
+            let lastIndex = 0;
+
+            while ((match = pattern.exec(result)) !== null) {
+                newResult += result.substring(lastIndex, match.index);
+                const openParen = match.index + match[0].length - 1;
+                const closeParen = findClosingParenNested(result, openParen);
+
+                if (closeParen !== -1) {
+                    const innerContent = result.substring(openParen + 1, closeParen);
+                    const processedInner = processNestedFunctions(innerContent);
+                    newResult += addPlaceholder(`\\lfloor ${processedInner} \\rfloor`);
+                    lastIndex = closeParen + 1;
+                    pattern.lastIndex = closeParen + 1;
+                } else {
+                    newResult += match[0];
+                    lastIndex = match.index + match[0].length;
+                }
+            }
+            newResult += result.substring(lastIndex);
+            result = newResult;
+        }
+
+        // Process ceil
+        {
+            const pattern = /\bceil\s*\(/g;
+            let match;
+            let newResult = '';
+            let lastIndex = 0;
+
+            while ((match = pattern.exec(result)) !== null) {
+                newResult += result.substring(lastIndex, match.index);
+                const openParen = match.index + match[0].length - 1;
+                const closeParen = findClosingParenNested(result, openParen);
+
+                if (closeParen !== -1) {
+                    const innerContent = result.substring(openParen + 1, closeParen);
+                    const processedInner = processNestedFunctions(innerContent);
+                    newResult += addPlaceholder(`\\lceil ${processedInner} \\rceil`);
+                    lastIndex = closeParen + 1;
+                    pattern.lastIndex = closeParen + 1;
+                } else {
+                    newResult += match[0];
+                    lastIndex = match.index + match[0].length;
+                }
+            }
+            newResult += result.substring(lastIndex);
+            result = newResult;
+        }
+
+        // Process parenthesized fractions: (...)/(...) or (...)/simple
+        {
+            let changed = true;
+            while (changed) {
+                changed = false;
+                // Look for )/ pattern indicating end of numerator
+                for (let i = 0; i < result.length - 1; i++) {
+                    if (result[i] === ')' && result[i + 1] === '/') {
+                        // Find the opening paren for the numerator
+                        let depth = 1;
+                        let numStart = i - 1;
+                        while (numStart >= 0 && depth > 0) {
+                            if (result[numStart] === ')') depth++;
+                            else if (result[numStart] === '(') depth--;
+                            numStart--;
+                        }
+                        numStart++; // Point to the opening (
+
+                        const numerator = result.substring(numStart + 1, i);
+                        let afterSlash = i + 2;
+                        // Skip whitespace
+                        while (afterSlash < result.length && result[afterSlash] === ' ') afterSlash++;
+
+                        if (result[afterSlash] === '(') {
+                            // (...)/(...) case
+                            const denCloseParen = findClosingParenNested(result, afterSlash);
+                            if (denCloseParen !== -1) {
+                                const denominator = result.substring(afterSlash + 1, denCloseParen);
+                                const placeholder = addPlaceholder(`\\frac{${numerator}}{${denominator}}`);
+                                result = result.substring(0, numStart) + placeholder + result.substring(denCloseParen + 1);
+                                changed = true;
+                                break;
+                            }
+                        } else {
+                            // (...)/simple case
+                            const simpleMatch = result.substring(afterSlash).match(/^([a-zA-Z0-9_]+|__PH\d+__)/);
+                            if (simpleMatch) {
+                                const denominator = simpleMatch[1];
+                                const placeholder = addPlaceholder(`\\frac{${numerator}}{${denominator}}`);
+                                result = result.substring(0, numStart) + placeholder + result.substring(afterSlash + denominator.length);
+                                changed = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Process simple fractions: a/b -> \frac{a}{b}
+        {
+            let changed = true;
+            while (changed) {
+                changed = false;
+                const fracMatch = result.match(/([a-zA-Z0-9_]+)\s*\/\s*([a-zA-Z0-9_]+)/);
+                if (fracMatch && fracMatch.index !== undefined) {
+                    const placeholder = addPlaceholder(`\\frac{${fracMatch[1]}}{${fracMatch[2]}}`);
+                    result = result.substring(0, fracMatch.index) + placeholder + result.substring(fracMatch.index + fracMatch[0].length);
+                    changed = true;
+                }
+            }
+        }
+
+        // Replace * with \cdot for multiplication
+        result = result.replace(/\s*\*\s*/g, ' \\cdot ');
+
+        // Process parenthesized exponents: (...)^(...) -> {...}^{...}
+        // This handles exponents with fractions inside like x^(1/n)
+        {
+            let changed = true;
+            while (changed) {
+                changed = false;
+                // Look for )^( pattern
+                for (let i = 0; i < result.length - 2; i++) {
+                    if (result[i] === ')' && result[i + 1] === '^' && result[i + 2] === '(') {
+                        // Find the opening paren for the base
+                        let depth = 1;
+                        let baseStart = i - 1;
+                        while (baseStart >= 0 && depth > 0) {
+                            if (result[baseStart] === ')') depth++;
+                            else if (result[baseStart] === '(') depth--;
+                            baseStart--;
+                        }
+                        baseStart++; // Point to the opening (
+
+                        // Find the closing paren for the exponent
+                        const expCloseParen = findClosingParenNested(result, i + 2);
+                        if (expCloseParen !== -1) {
+                            const base = result.substring(baseStart + 1, i);
+                            const exp = result.substring(i + 3, expCloseParen);
+                            // Process fractions in exponent
+                            let processedExp = exp;
+                            // Simple fraction: a/b
+                            const fracMatch = processedExp.match(/^([a-zA-Z0-9_]+)\s*\/\s*([a-zA-Z0-9_]+)$/);
+                            if (fracMatch) {
+                                processedExp = addPlaceholder(`\\frac{${fracMatch[1]}}{${fracMatch[2]}}`);
+                            }
+                            const placeholder = addPlaceholder(`(${base})^{${processedExp}}`);
+                            result = result.substring(0, baseStart) + placeholder + result.substring(expCloseParen + 1);
+                            changed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         return result;
     };
 
@@ -449,25 +668,27 @@ export const compileMathScript = (input: string): CompilationResult => {
     };
 
     // Floor: floor(x) -> \lfloor x \rfloor (with nested paren support)
-    // Process BEFORE trig functions so floor() inside cos() works
+    // Process nested functions first (e.g., floor(cos(x)))
     processedLine = handleFunctionCall(processedLine, 'floor', (content) => {
-        let processedInner = processFractionsInContent(content);
+        let processedInner = processNestedFunctions(content);
+        processedInner = processFractionsInContent(processedInner);
         return addPlaceholder(`\\lfloor ${processContent(processedInner)} \\rfloor`);
     });
 
     // Ceil: ceil(x) -> \lceil x \rceil (with nested paren support)
     processedLine = handleFunctionCall(processedLine, 'ceil', (content) => {
-        let processedInner = processFractionsInContent(content);
+        let processedInner = processNestedFunctions(content);
+        processedInner = processFractionsInContent(processedInner);
         return addPlaceholder(`\\lceil ${processContent(processedInner)} \\rceil`);
     });
 
     // Trig and other functions: sin(x) -> \sin(x), cos(x) -> \cos(x), etc.
-    // NOTE: We need to process fractions INSIDE the function content before wrapping
+    // NOTE: We need to process nested functions and fractions INSIDE the function content
     const mathFunctions = ['sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'arcsin', 'arccos', 'arctan', 'sinh', 'cosh', 'tanh', 'log', 'ln', 'exp'];
     mathFunctions.forEach(fn => {
         processedLine = handleFunctionCall(processedLine, fn, (content) => {
-            // Process fractions inside the function argument first
-            let processedInner = content;
+            // Process nested functions first (e.g., cos(floor(x)))
+            let processedInner = processNestedFunctions(content);
             // Handle (...)/(...) and (...)/simple patterns inside the argument
             processedInner = processFractionsInContent(processedInner);
             return addPlaceholder(`\\${fn}(${processContent(processedInner)})`);
