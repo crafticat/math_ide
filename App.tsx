@@ -351,9 +351,19 @@ export default function App() {
     printWindow.document.write(`
       <html>
         <head>
-          <title>MathBrain Export</title>
+          <title>Mathematical Document</title>
           <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
           <style>
+            @page {
+              margin: 0.5in;
+              size: auto;
+            }
+            @media print {
+              html, body {
+                margin: 0;
+                padding: 0;
+              }
+            }
             body {
               font-family: 'Latin Modern', 'Times New Roman', serif;
               padding: 50px;
@@ -373,11 +383,9 @@ export default function App() {
             .katex-display > .katex > .katex-html {
               width: 100%;
             }
-            h1 { border-bottom: 2px solid black; padding-bottom: 10px; margin-bottom: 20px; }
           </style>
         </head>
         <body>
-          <h1>Document Output</h1>
           ${htmlContent}
           <script>
             window.onload = function() { window.print(); }

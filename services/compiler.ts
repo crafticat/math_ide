@@ -157,13 +157,18 @@ export const compileMathScript = (input: string): CompilationResult => {
         return;
     }
 
-    // --- MACRO & COMPLEX REPLACEMENT ---
+    // --- MACRO REPLACEMENT ---
     // Use word boundary regex to avoid matching inside other words (e.g., 'N' inside 'AND')
     Object.keys(macros).forEach(k => {
         const regex = new RegExp(`\\b${k}\\b`, 'g');
         processedLine = processedLine.replace(regex, macros[k]);
     });
-    Object.keys(mathPackage).forEach(k => { processedLine = processedLine.split(k).join(mathPackage[k]); });
+
+    // Apply Math.* replacements FIRST (before any fraction processing)
+    // This ensures Math.pi/2 becomes \pi/2, which then becomes \frac{\pi}{2}
+    Object.keys(mathPackage).forEach(k => {
+        processedLine = processedLine.split(k).join(mathPackage[k]);
+    });
 
     // Placeholder system: protect complex LaTeX constructs from tokenization
     const placeholders: string[] = [];
@@ -172,6 +177,62 @@ export const compileMathScript = (input: string): CompilationResult => {
         placeholders.push(latex);
         return id;
     };
+
+    // Handle "not in" as two words -> \notin (before other processing)
+    processedLine = processedLine.replace(/\bnot\s+in\b/g, 'notin');
+
+    // Handle set builder notation: {x in A : condition} -> \{x \in A \mid condition\}
+    // Also handles {x : condition} without explicit membership
+    const processSetContent = (content: string): string => {
+        // Apply symbol replacements inside set content
+        let result = content;
+        result = result.replace(/\bnotin\b/g, '\\notin');
+        result = result.replace(/\bin\b/g, '\\in');
+        result = result.replace(/\bsubset\b/g, '\\subset');
+        result = result.replace(/\bunion\b/g, '\\cup');
+        result = result.replace(/\bintersect\b/g, '\\cap');
+        return result;
+    };
+
+    const handleSetBuilder = (line: string): string => {
+        let result = '';
+        let i = 0;
+        while (i < line.length) {
+            if (line[i] === '{') {
+                // Find matching closing brace
+                let depth = 1;
+                let j = i + 1;
+                while (j < line.length && depth > 0) {
+                    if (line[j] === '{') depth++;
+                    else if (line[j] === '}') depth--;
+                    j++;
+                }
+                if (depth === 0) {
+                    const content = line.substring(i + 1, j - 1);
+                    // Check if this looks like set builder notation (contains : or |)
+                    const colonIndex = content.indexOf(':');
+                    const pipeIndex = content.indexOf('|');
+                    const separatorIndex = colonIndex !== -1 ? colonIndex : pipeIndex;
+
+                    if (separatorIndex !== -1) {
+                        // It's set builder notation
+                        const element = processSetContent(content.substring(0, separatorIndex).trim());
+                        const condition = processSetContent(content.substring(separatorIndex + 1).trim());
+                        result += addPlaceholder(`\\{${element} \\mid ${condition}\\}`);
+                    } else {
+                        // Regular braces - escape them for LaTeX
+                        result += addPlaceholder(`\\{${processSetContent(content)}\\}`);
+                    }
+                    i = j;
+                    continue;
+                }
+            }
+            result += line[i];
+            i++;
+        }
+        return result;
+    };
+    processedLine = handleSetBuilder(processedLine);
 
     // Helper to recursively process content (for nested constructs)
     const greekLetters: Record<string, string> = {
@@ -185,12 +246,9 @@ export const compileMathScript = (input: string): CompilationResult => {
     };
     const processContent = (content: string): string => {
         let result = content;
-        // Apply Greek letters
-        Object.entries(greekLetters).forEach(([name, latex]) => {
-            result = result.replace(new RegExp(`\\b${name}\\b`, 'g'), latex);
-        });
-        // Apply common math symbols
-        result = result.replace(/\binf\b/g, '\\infty');
+        // NOTE: We DON'T apply Greek letters here because that would break Math.pi
+        // Greek letters and Math.* replacements happen AFTER placeholder restoration
+
         // Apply subscripts/superscripts to content
         result = result.replace(/([a-zA-Z])_([a-zA-Z0-9]+)(?![{}])/g, '$1_{$2}');
         result = result.replace(/([a-zA-Z0-9])(?<![\\])\^([a-zA-Z0-9]+)(?![{}])/g, '$1^{$2}');
@@ -206,12 +264,55 @@ export const compileMathScript = (input: string): CompilationResult => {
     });
 
     // Sum with bounds: sum(i=1 -> n) -> \sum_{i=1}^{n}
-    processedLine = processedLine.replace(/sum\s*\(\s*(.*?)\s*->\s*(.*?)\s*\)/g, (_, from, to) => {
-        return addPlaceholder(`\\sum_{${processContent(from)}}^{${processContent(to)}}`);
-    });
+    // Also support sum_(i=1 -> n) syntax
+    // Handle nested parentheses properly
+    const handleSumBounds = (line: string): string => {
+        const sumPattern = /sum\s*_?\s*\(/g;
+        let result = '';
+        let lastIndex = 0;
+        let match;
 
-    // Limit: lim_(x -> 0) -> \lim_{x \to 0}
-    processedLine = processedLine.replace(/lim\s*_\s*\(\s*(.*?)\s*->\s*(.*?)\s*\)/g, (_, variable, limit) => {
+        while ((match = sumPattern.exec(line)) !== null) {
+            result += line.substring(lastIndex, match.index);
+            const startParen = match.index + match[0].length - 1;
+
+            // Find matching closing parenthesis
+            let depth = 1;
+            let j = startParen + 1;
+            while (j < line.length && depth > 0) {
+                if (line[j] === '(') depth++;
+                else if (line[j] === ')') depth--;
+                j++;
+            }
+
+            if (depth === 0) {
+                const content = line.substring(startParen + 1, j - 1);
+                // Find the -> separator
+                const arrowIndex = content.indexOf('->');
+                if (arrowIndex !== -1) {
+                    const from = content.substring(0, arrowIndex).trim();
+                    const to = content.substring(arrowIndex + 2).trim();
+                    result += addPlaceholder(`\\sum_{${processContent(from)}}^{${processContent(to)}}`);
+                } else {
+                    // No arrow, just output sum with content
+                    result += addPlaceholder(`\\sum{${processContent(content)}}`);
+                }
+                lastIndex = j;
+                sumPattern.lastIndex = j;
+            } else {
+                // Unmatched parenthesis, skip this match
+                result += match[0];
+                lastIndex = match.index + match[0].length;
+            }
+        }
+
+        result += line.substring(lastIndex);
+        return result;
+    };
+    processedLine = handleSumBounds(processedLine);
+
+    // Limit: lim(x -> 0) -> \lim_{x \to 0}  (underscore is optional)
+    processedLine = processedLine.replace(/lim\s*_?\s*\(\s*(.*?)\s*->\s*(.*?)\s*\)/g, (_, variable, limit) => {
         return addPlaceholder(`\\lim_{${processContent(variable)} \\to ${processContent(limit)}}`);
     });
 
@@ -225,12 +326,137 @@ export const compileMathScript = (input: string): CompilationResult => {
         return addPlaceholder(`\\vec{${processContent(content)}}`);
     });
 
+    // Helper to find matching closing paren for function calls
+    const findClosingParen = (str: string, openIndex: number): number => {
+        let depth = 1;
+        for (let i = openIndex + 1; i < str.length; i++) {
+            if (str[i] === '(') depth++;
+            else if (str[i] === ')') {
+                depth--;
+                if (depth === 0) return i;
+            }
+        }
+        return -1;
+    };
+
+    // Helper to handle function calls with proper nested paren support
+    const handleFunctionCall = (line: string, fnName: string, transformer: (content: string) => string): string => {
+        const pattern = new RegExp(`\\b${fnName}\\s*\\(`, 'g');
+        let result = '';
+        let lastIndex = 0;
+        let match;
+
+        while ((match = pattern.exec(line)) !== null) {
+            result += line.substring(lastIndex, match.index);
+            const openParen = match.index + match[0].length - 1;
+            const closeParen = findClosingParen(line, openParen);
+
+            if (closeParen !== -1) {
+                const content = line.substring(openParen + 1, closeParen);
+                result += transformer(content);
+                lastIndex = closeParen + 1;
+                pattern.lastIndex = closeParen + 1;
+            } else {
+                result += match[0];
+                lastIndex = match.index + match[0].length;
+            }
+        }
+        result += line.substring(lastIndex);
+        return result;
+    };
+
+    // Helper to find matching paren from a start index
+    const findMatchingParenFrom = (str: string, startIdx: number): number => {
+        let depth = 1;
+        for (let i = startIdx; i < str.length; i++) {
+            if (str[i] === '(') depth++;
+            else if (str[i] === ')') {
+                depth--;
+                if (depth === 0) return i;
+            }
+        }
+        return -1;
+    };
+
+    // Process fractions within content (used for function arguments)
+    // Handles: (...)/(...), (...)/simple, simple/simple patterns
+    const processFractionsInContent = (content: string): string => {
+        let result = content;
+        let changed = true;
+        let iterations = 0;
+        const maxIterations = 20;
+
+        while (changed && iterations < maxIterations) {
+            changed = false;
+            iterations++;
+
+            // Pattern 1: (...)/(...) or (...)/simple
+            for (let i = 0; i < result.length; i++) {
+                if (result[i] === '(') {
+                    const closeIdx = findMatchingParenFrom(result, i + 1);
+                    if (closeIdx === -1) continue;
+
+                    // Check if followed by /
+                    let afterClose = closeIdx + 1;
+                    while (afterClose < result.length && result[afterClose] === ' ') afterClose++;
+
+                    if (result[afterClose] === '/') {
+                        const num = result.substring(i + 1, closeIdx);
+                        let afterSlash = afterClose + 1;
+                        while (afterSlash < result.length && result[afterSlash] === ' ') afterSlash++;
+
+                        if (result[afterSlash] === '(') {
+                            // (...)/(...) case
+                            const denCloseIdx = findMatchingParenFrom(result, afterSlash + 1);
+                            if (denCloseIdx !== -1) {
+                                const den = result.substring(afterSlash + 1, denCloseIdx);
+                                const placeholder = addPlaceholder(`\\frac{${processContent(num)}}{${processContent(den)}}`);
+                                result = result.substring(0, i) + placeholder + result.substring(denCloseIdx + 1);
+                                changed = true;
+                                break;
+                            }
+                        } else {
+                            // (...)/simple case
+                            const match = result.substring(afterSlash).match(/^([a-zA-Z0-9_]+|__PH\d+__)/);
+                            if (match) {
+                                const den = match[1];
+                                const placeholder = addPlaceholder(`\\frac{${processContent(num)}}{${processContent(den)}}`);
+                                result = result.substring(0, i) + placeholder + result.substring(afterSlash + den.length);
+                                changed = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Pattern 2: simple/simple (only if no parentheses involved)
+            // Also handle \pi/2 etc. with optional leading backslash
+            if (!changed) {
+                const simpleMatch = result.match(/(\\?)([a-zA-Z0-9_]+)\s*\/\s*([a-zA-Z0-9_]+)/);
+                if (simpleMatch && simpleMatch.index !== undefined) {
+                    const [fullMatch, leadingBackslash, num, den] = simpleMatch;
+                    const numWithBackslash = leadingBackslash + num;
+                    const placeholder = addPlaceholder(`\\frac{${numWithBackslash}}{${processContent(den)}}`);
+                    result = result.substring(0, simpleMatch.index) + placeholder + result.substring(simpleMatch.index + fullMatch.length);
+                    changed = true;
+                }
+            }
+        }
+
+        return result;
+    };
+
     // Trig and other functions: sin(x) -> \sin(x), cos(x) -> \cos(x), etc.
+    // NOTE: We need to process fractions INSIDE the function content before wrapping
     const mathFunctions = ['sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'arcsin', 'arccos', 'arctan', 'sinh', 'cosh', 'tanh', 'log', 'ln', 'exp'];
     mathFunctions.forEach(fn => {
-        const regex = new RegExp(`\\b${fn}\\s*\\(\\s*([^)]+)\\s*\\)`, 'g');
-        processedLine = processedLine.replace(regex, (_, content) => {
-            return addPlaceholder(`\\${fn}(${processContent(content)})`);
+        processedLine = handleFunctionCall(processedLine, fn, (content) => {
+            // Process fractions inside the function argument first
+            let processedInner = content;
+            // Handle (...)/(...) and (...)/simple patterns inside the argument
+            processedInner = processFractionsInContent(processedInner);
+            return addPlaceholder(`\\${fn}(${processContent(processedInner)})`);
         });
     });
 
@@ -244,9 +470,15 @@ export const compileMathScript = (input: string): CompilationResult => {
         return addPlaceholder(`\\binom{${processContent(n.trim())}}{${processContent(k.trim())}}`);
     });
 
-    // Factorial: factorial(n) -> n!
-    processedLine = processedLine.replace(/factorial\s*\(\s*([^)]+)\s*\)/g, (_, content) => {
-        return addPlaceholder(`${processContent(content.trim())}!`);
+    // Factorial: factorial(n) -> n! or (expr)! if content has operators
+    processedLine = handleFunctionCall(processedLine, 'factorial', (content) => {
+        const trimmed = content.trim();
+        const processed = processContent(trimmed);
+        // If content has operators or spaces, wrap in parentheses
+        if (/[\s+\-*/]/.test(trimmed)) {
+            return addPlaceholder(`(${processed})!`);
+        }
+        return addPlaceholder(`${processed}!`);
     });
 
     // Absolute value: |...| -> \left|...\right|
@@ -308,7 +540,7 @@ export const compileMathScript = (input: string): CompilationResult => {
                             }
                         } else {
                             // (...)/simple case
-                            const match = result.substring(afterSlash).match(/^([a-zA-Z0-9_]+|\\_PH\d+__)/);
+                            const match = result.substring(afterSlash).match(/^([a-zA-Z0-9_]+|__PH\d+__)/);
                             if (match) {
                                 const den = match[1];
                                 const placeholder = addPlaceholder(`\\frac{${processContent(num)}}{${processContent(den)}}`);
@@ -325,13 +557,52 @@ export const compileMathScript = (input: string): CompilationResult => {
     };
     processedLine = handleParenFractions(processedLine);
 
-    // Handle simple a/b (no parens)
-    processedLine = processedLine.replace(/([a-zA-Z0-9]+)\s*\/\s*([a-zA-Z0-9]+)/g, (_, num, den) => {
-        return addPlaceholder(`\\frac{${processContent(num)}}{${processContent(den)}}`);
+    // Handle simple a/b (no parens) - include underscores for placeholders and subscripts
+    // Also handle \pi/2 etc. with optional leading backslash
+    processedLine = processedLine.replace(/(\\?)([a-zA-Z0-9_]+)\s*\/\s*([a-zA-Z0-9_]+)/g, (_, leadingBackslash, num, den) => {
+        const numWithBackslash = leadingBackslash + num;
+        return addPlaceholder(`\\frac{${numWithBackslash}}{${processContent(den)}}`);
     });
 
     // Subscripts: a_i -> a_{i}
     processedLine = processedLine.replace(/([a-zA-Z])_([a-zA-Z0-9]+)(?![{}])/g, '$1_{$2}');
+
+    // Subscripts with parenthesized content: a_(x + 1) -> a_{x + 1}
+    const handleParenthesizedSubscript = (line: string): string => {
+        let result = '';
+        let i = 0;
+        while (i < line.length) {
+            // Look for pattern: char_(
+            if (i > 0 && line[i] === '_' && line[i + 1] === '(') {
+                const baseChar = result[result.length - 1];
+                if (/[a-zA-Z0-9\}]/.test(baseChar)) {
+                    // Find matching closing parenthesis
+                    let depth = 1;
+                    let j = i + 2;
+                    while (j < line.length && depth > 0) {
+                        if (line[j] === '(') depth++;
+                        else if (line[j] === ')') depth--;
+                        j++;
+                    }
+                    if (depth === 0) {
+                        // Extract content between parentheses
+                        const subscriptContent = line.substring(i + 2, j - 1);
+                        // Process the content recursively for any nested constructs
+                        const processedSubscript = processContent(subscriptContent);
+                        // Remove the base character and add placeholder with full subscript
+                        result = result.slice(0, -1);
+                        result += addPlaceholder(`${baseChar}_{${processedSubscript}}`);
+                        i = j;
+                        continue;
+                    }
+                }
+            }
+            result += line[i];
+            i++;
+        }
+        return result;
+    };
+    processedLine = handleParenthesizedSubscript(processedLine);
 
     // Superscripts with parenthesized content: e^(i * pi) -> e^{i * pi}
     // Use a function to handle nested parentheses properly
@@ -356,7 +627,9 @@ export const compileMathScript = (input: string): CompilationResult => {
                         const exponentContent = line.substring(i + 2, j - 1);
                         // Process the content recursively for any nested constructs
                         const processedExponent = processContent(exponentContent);
-                        result += `^{${processedExponent}}`;
+                        // Remove the base character and add placeholder with full superscript
+                        result = result.slice(0, -1);
+                        result += addPlaceholder(`${baseChar}^{${processedExponent}}`);
                         i = j;
                         continue;
                     }
@@ -371,6 +644,9 @@ export const compileMathScript = (input: string): CompilationResult => {
 
     // Superscripts: x^2 -> x^{2} (simple alphanumeric exponents)
     processedLine = processedLine.replace(/([a-zA-Z0-9\}])\^([a-zA-Z0-9]+)(?![{}])/g, '$1^{$2}');
+
+    // NOTE: Math.pi replacement happens AFTER placeholder restoration (see end of function)
+    // This ensures symbols inside function arguments get properly replaced
 
     // --- SMART SEGMENTATION & TEXT DETECTION ---
 
@@ -562,6 +838,16 @@ export const compileMathScript = (input: string): CompilationResult => {
             outputLatex = outputLatex.replace(`__PH${i}__`, latex);
         });
     }
+
+    // Math.* replacements already happened at the start
+    // Now apply Greek letter replacements
+    // Use negative lookbehind to avoid replacing already-escaped \pi, \alpha, etc.
+    Object.entries(greekLetters).forEach(([name, latex]) => {
+        outputLatex = outputLatex.replace(new RegExp(`(?<!\\\\)\\b${name}\\b`, 'g'), latex);
+    });
+
+    // Apply inf -> \infty
+    outputLatex = outputLatex.replace(/\binf\b/g, '\\infty');
 
     const indentStr = Array(indentLevel).fill('\\quad ').join('');
 

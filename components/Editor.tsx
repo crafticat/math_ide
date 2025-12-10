@@ -246,6 +246,50 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
           }
       }
 
+      // Command/Ctrl + D: Select next occurrence of selected word
+      if ((e.metaKey || e.ctrlKey) && e.key === 'd') {
+          e.preventDefault();
+          const textarea = e.currentTarget;
+          const { selectionStart, selectionEnd } = textarea;
+
+          // Get currently selected text or word at cursor
+          let selectedText = content.substring(selectionStart, selectionEnd);
+
+          if (!selectedText) {
+              // No selection - select word at cursor
+              let start = selectionStart;
+              let end = selectionEnd;
+
+              // Find word boundaries
+              while (start > 0 && /\w/.test(content[start - 1])) {
+                  start--;
+              }
+              while (end < content.length && /\w/.test(content[end])) {
+                  end++;
+              }
+
+              if (start !== end) {
+                  selectedText = content.substring(start, end);
+                  textarea.setSelectionRange(start, end);
+              }
+          } else {
+              // Find next occurrence
+              const searchStart = selectionEnd;
+              let nextIndex = content.indexOf(selectedText, searchStart);
+
+              // If not found after cursor, wrap to beginning
+              if (nextIndex === -1) {
+                  nextIndex = content.indexOf(selectedText, 0);
+              }
+
+              // If found and not the same selection
+              if (nextIndex !== -1 && nextIndex !== selectionStart) {
+                  textarea.setSelectionRange(nextIndex, nextIndex + selectedText.length);
+              }
+          }
+          return;
+      }
+
       // Tab key for manual indentation
       if (e.key === 'Tab') {
           e.preventDefault();
@@ -589,8 +633,10 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
              <div
                 className="absolute z-50 w-64 shadow-xl rounded-md flex flex-col overflow-hidden"
                 style={{
-                    top: `min(${cursorPos.top}px, 80%)`,
-                    left: `min(${cursorPos.left + 50}px, 80%)`,
+                    top: Math.min(cursorPos.top + containerPadding, 300),
+                    left: Math.min(Math.max(cursorPos.left + containerPadding, 0), 400),
+                    maxHeight: '200px',
+                    overflowY: 'auto',
                     backgroundColor: colors.popup,
                     border: `1px solid ${colors.popupBorder}`
                 }}
