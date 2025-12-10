@@ -1,12 +1,37 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { X, ChevronDown, ChevronRight } from 'lucide-react';
-import { generateSyntaxReference, SyntaxCategory } from '../../services/syntaxReference';
+import { generateSyntaxReference } from '../../services/syntaxReference';
 
 interface SyntaxHelpDialogProps {
   isOpen: boolean;
   onClose: () => void;
   theme: 'dark' | 'light';
 }
+
+// Component to render LaTeX using KaTeX
+const RenderedMath: React.FC<{ latex: string }> = ({ latex }) => {
+  const html = useMemo(() => {
+    if (!latex || latex === '-') return null;
+    try {
+      // @ts-ignore - katex is loaded globally
+      return window.katex?.renderToString(latex, {
+        throwOnError: false,
+        displayMode: false,
+      });
+    } catch {
+      return null;
+    }
+  }, [latex]);
+
+  if (!html) return <span className="text-gray-500">-</span>;
+
+  return (
+    <span
+      dangerouslySetInnerHTML={{ __html: html }}
+      className="katex-inline"
+    />
+  );
+};
 
 export const SyntaxHelpDialog: React.FC<SyntaxHelpDialogProps> = ({
   isOpen,
@@ -57,7 +82,7 @@ export const SyntaxHelpDialog: React.FC<SyntaxHelpDialogProps> = ({
       {/* Dialog */}
       <div
         className={`
-          relative w-[700px] max-h-[80vh] rounded-lg shadow-xl flex flex-col
+          relative w-[750px] max-h-[80vh] rounded-lg shadow-xl flex flex-col
           ${isDark ? 'bg-[#1e1e1e] text-gray-200' : 'bg-white text-gray-800'}
         `}
       >
@@ -102,9 +127,9 @@ export const SyntaxHelpDialog: React.FC<SyntaxHelpDialogProps> = ({
                   <table className="w-full text-sm">
                     <thead>
                       <tr className={isDark ? 'bg-[#252526]' : 'bg-gray-50'}>
-                        <th className="text-left px-3 py-2 font-medium">Syntax</th>
-                        <th className="text-left px-3 py-2 font-medium">Output</th>
-                        <th className="text-left px-3 py-2 font-medium">Description</th>
+                        <th className="text-left px-3 py-2 font-medium w-[35%]">Syntax</th>
+                        <th className="text-left px-3 py-2 font-medium w-[30%]">Rendered</th>
+                        <th className="text-left px-3 py-2 font-medium w-[35%]">Description</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -120,10 +145,10 @@ export const SyntaxHelpDialog: React.FC<SyntaxHelpDialogProps> = ({
                           <td className={`px-3 py-2 font-mono text-xs ${isDark ? 'text-[#ce9178]' : 'text-orange-700'}`}>
                             {item.syntax}
                           </td>
-                          <td className={`px-3 py-2 font-mono text-xs ${isDark ? 'text-[#9cdcfe]' : 'text-blue-700'}`}>
-                            {item.output || '-'}
+                          <td className={`px-3 py-2 ${isDark ? 'text-gray-200' : 'text-gray-800'}`}>
+                            <RenderedMath latex={item.output} />
                           </td>
-                          <td className={`px-3 py-2 ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
+                          <td className={`px-3 py-2 text-xs ${isDark ? 'text-gray-400' : 'text-gray-600'}`}>
                             {item.description || ''}
                           </td>
                         </tr>
