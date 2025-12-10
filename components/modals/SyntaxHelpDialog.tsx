@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { X, ChevronDown, ChevronRight } from 'lucide-react';
+import { generateSyntaxReference, SyntaxCategory } from '../../services/syntaxReference';
 
 interface SyntaxHelpDialogProps {
   isOpen: boolean;
@@ -7,147 +8,17 @@ interface SyntaxHelpDialogProps {
   theme: 'dark' | 'light';
 }
 
-interface SyntaxCategory {
-  title: string;
-  items: { syntax: string; output: string; description?: string }[];
-}
-
-const syntaxData: SyntaxCategory[] = [
-  {
-    title: 'Basic Math',
-    items: [
-      { syntax: 'a/b', output: '\\frac{a}{b}', description: 'Fraction' },
-      { syntax: '(a+b)/(c+d)', output: '\\frac{a+b}{c+d}', description: 'Complex fraction' },
-      { syntax: 'sqrt(x)', output: '\\sqrt{x}', description: 'Square root' },
-      { syntax: 'x^2', output: 'x^2', description: 'Superscript/power' },
-      { syntax: 'x_i', output: 'x_i', description: 'Subscript' },
-      { syntax: 'x_ij', output: 'x_{ij}', description: 'Multi-char subscript' },
-      { syntax: '|x|', output: '|x|', description: 'Absolute value' },
-      { syntax: '+-', output: '\\pm', description: 'Plus-minus' },
-      { syntax: '-+', output: '\\mp', description: 'Minus-plus' },
-    ],
-  },
-  {
-    title: 'Functions',
-    items: [
-      { syntax: 'sin(x)', output: '\\sin(x)', description: 'Sine' },
-      { syntax: 'cos(x)', output: '\\cos(x)', description: 'Cosine' },
-      { syntax: 'tan(x)', output: '\\tan(x)', description: 'Tangent' },
-      { syntax: 'log(x)', output: '\\log(x)', description: 'Logarithm' },
-      { syntax: 'ln(x)', output: '\\ln(x)', description: 'Natural log' },
-      { syntax: 'exp(x)', output: '\\exp(x)', description: 'Exponential' },
-      { syntax: 'factorial(n)', output: 'n!', description: 'Factorial' },
-      { syntax: 'factorial(n-1)', output: '(n-1)!', description: 'Factorial with expression' },
-    ],
-  },
-  {
-    title: 'Calculus',
-    items: [
-      { syntax: 'integral(a -> b) f(x) dx', output: '\\int_a^b f(x)\\,dx', description: 'Definite integral' },
-      { syntax: 'integral f(x) dx', output: '\\int f(x)\\,dx', description: 'Indefinite integral' },
-      { syntax: 'sum(i=1 -> n) a_i', output: '\\sum_{i=1}^{n} a_i', description: 'Summation' },
-      { syntax: 'prod(i=1 -> n) a_i', output: '\\prod_{i=1}^{n} a_i', description: 'Product' },
-      { syntax: 'lim(x -> 0) f(x)', output: '\\lim_{x \\to 0} f(x)', description: 'Limit' },
-      { syntax: 'lim(x -> inf) f(x)', output: '\\lim_{x \\to \\infty} f(x)', description: 'Limit to infinity' },
-    ],
-  },
-  {
-    title: 'Combinatorics',
-    items: [
-      { syntax: 'choose(n, k)', output: '\\binom{n}{k}', description: 'Binomial coefficient' },
-      { syntax: 'factorial(n)', output: 'n!', description: 'Factorial' },
-    ],
-  },
-  {
-    title: 'Greek Letters',
-    items: [
-      { syntax: 'alpha, beta, gamma', output: '\\alpha, \\beta, \\gamma' },
-      { syntax: 'delta, epsilon, theta', output: '\\delta, \\epsilon, \\theta' },
-      { syntax: 'lambda, sigma, omega', output: '\\lambda, \\sigma, \\omega' },
-      { syntax: 'pi, phi, psi', output: '\\pi, \\phi, \\psi' },
-      { syntax: 'mu, nu, rho, tau', output: '\\mu, \\nu, \\rho, \\tau' },
-      { syntax: 'eta, zeta, xi', output: '\\eta, \\zeta, \\xi' },
-    ],
-  },
-  {
-    title: 'Math Constants',
-    items: [
-      { syntax: 'Math.pi', output: '\\pi', description: 'Pi' },
-      { syntax: 'Math.e', output: 'e', description: "Euler's number" },
-      { syntax: 'Math.inf or inf', output: '\\infty', description: 'Infinity' },
-      { syntax: 'Math.reals', output: '\\mathbb{R}', description: 'Real numbers' },
-      { syntax: 'Math.naturals', output: '\\mathbb{N}', description: 'Natural numbers' },
-      { syntax: 'Math.integers', output: '\\mathbb{Z}', description: 'Integers' },
-      { syntax: 'Math.rationals', output: '\\mathbb{Q}', description: 'Rationals' },
-      { syntax: 'Math.complex', output: '\\mathbb{C}', description: 'Complex numbers' },
-    ],
-  },
-  {
-    title: 'Logic & Quantifiers',
-    items: [
-      { syntax: 'forall', output: '\\forall', description: 'For all' },
-      { syntax: 'exists', output: '\\exists', description: 'There exists' },
-      { syntax: 'AND', output: '\\land', description: 'Logical and' },
-      { syntax: 'OR', output: '\\lor', description: 'Logical or' },
-      { syntax: 'NOT', output: '\\neg', description: 'Logical not' },
-      { syntax: '=>', output: '\\implies', description: 'Implies' },
-      { syntax: '<=>', output: '\\iff', description: 'If and only if' },
-      { syntax: 'suchthat', output: '\\mid', description: 'Such that' },
-    ],
-  },
-  {
-    title: 'Sets',
-    items: [
-      { syntax: 'in', output: '\\in', description: 'Element of' },
-      { syntax: 'notin', output: '\\notin', description: 'Not element of' },
-      { syntax: 'subset', output: '\\subset', description: 'Subset' },
-      { syntax: 'superset', output: '\\supset', description: 'Superset' },
-      { syntax: 'union', output: '\\cup', description: 'Union' },
-      { syntax: 'intersect', output: '\\cap', description: 'Intersection' },
-      { syntax: 'emptyset', output: '\\emptyset', description: 'Empty set' },
-      { syntax: '{x in R suchthat x > 0}', output: '\\{x \\in \\mathbb{R} \\mid x > 0\\}', description: 'Set builder' },
-    ],
-  },
-  {
-    title: 'Comparisons',
-    items: [
-      { syntax: '<=', output: '\\leq', description: 'Less than or equal' },
-      { syntax: '>=', output: '\\geq', description: 'Greater than or equal' },
-      { syntax: '!=', output: '\\neq', description: 'Not equal' },
-      { syntax: '~=', output: '\\approx', description: 'Approximately' },
-      { syntax: '===', output: '\\equiv', description: 'Equivalent' },
-    ],
-  },
-  {
-    title: 'Document Structure',
-    items: [
-      { syntax: 'Problem Name { ... }', output: '', description: 'Problem block' },
-      { syntax: 'Theorem Name { ... }', output: '', description: 'Theorem block' },
-      { syntax: 'Proof { ... }', output: '', description: 'Proof block' },
-      { syntax: 'Lemma Name { ... }', output: '', description: 'Lemma block' },
-      { syntax: 'Case Name { ... }', output: '', description: 'Case block' },
-      { syntax: '// comment', output: '', description: 'Single-line comment' },
-      { syntax: '#define short long', output: '', description: 'Macro definition' },
-    ],
-  },
-  {
-    title: 'Vectors & Matrices',
-    items: [
-      { syntax: 'vec(v)', output: '\\vec{v}', description: 'Vector arrow' },
-      { syntax: 'hat(x)', output: '\\hat{x}', description: 'Hat notation' },
-      { syntax: 'bar(x)', output: '\\bar{x}', description: 'Bar notation' },
-      { syntax: 'dot(x)', output: '\\dot{x}', description: 'Dot (derivative)' },
-      { syntax: 'ddot(x)', output: '\\ddot{x}', description: 'Double dot' },
-    ],
-  },
-];
-
 export const SyntaxHelpDialog: React.FC<SyntaxHelpDialogProps> = ({
   isOpen,
   onClose,
   theme,
 }) => {
-  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(syntaxData.map(c => c.title)));
+  // Generate syntax data from compiler configuration
+  const syntaxData = useMemo(() => generateSyntaxReference(), []);
+
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
+    new Set(syntaxData.map(c => c.title))
+  );
   const isDark = theme === 'dark';
 
   useEffect(() => {
