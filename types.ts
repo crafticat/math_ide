@@ -26,6 +26,8 @@ export interface AppSettings {
   previewVisible: boolean;
   editorZoom: number;
   theme: 'dark' | 'light';
+  autosaveEnabled: boolean;
+  autosaveInterval: number; // in milliseconds
 }
 
 export interface MenuItemDef {

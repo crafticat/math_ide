@@ -37,6 +37,9 @@ interface MenuBarProps {
   onResetZoom: () => void;
   onToggleTheme: () => void;
   editorZoom: number;
+  // Autosave
+  autosaveEnabled: boolean;
+  onToggleAutosave: () => void;
 }
 
 export const MenuBar: React.FC<MenuBarProps> = ({
@@ -67,6 +70,8 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   onResetZoom,
   onToggleTheme,
   editorZoom,
+  autosaveEnabled,
+  onToggleAutosave,
 }) => {
   const [activeMenu, setActiveMenu] = useState<MenuType>(null);
   const [showRecentSubmenu, setShowRecentSubmenu] = useState(false);
@@ -89,7 +94,8 @@ export const MenuBar: React.FC<MenuBarProps> = ({
   const fileMenuItems: MenuItemDef[] = [
     { label: 'New File', shortcut: `${cmdKey}+N`, action: onNewFile, dividerAfter: true },
     { label: 'Save', shortcut: `${cmdKey}+S`, action: onSave },
-    { label: 'Save As...', shortcut: `${cmdKey}+Shift+S`, action: onSaveAs, dividerAfter: true },
+    { label: 'Save As...', shortcut: `${cmdKey}+Shift+S`, action: onSaveAs },
+    { label: `${autosaveEnabled ? '✓ ' : '   '}Autosave`, action: onToggleAutosave, dividerAfter: true },
     { label: 'Delete File', action: onDeleteFile, dividerAfter: recentFiles.length > 0 },
   ];
 

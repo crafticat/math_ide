@@ -33,7 +33,8 @@ export default function App() {
 
   // UI State
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
-  const { sidebarVisible, consoleVisible, previewVisible, editorZoom, theme } = settings;
+  const { sidebarVisible, consoleVisible, previewVisible, editorZoom, theme, autosaveEnabled, autosaveInterval } = settings;
+  const [lastSaveTime, setLastSaveTime] = useState<Date | null>(null);
 
   // Dialogs
   const [dialogType, setDialogType] = useState<'new' | 'saveAs' | 'delete' | null>(null);
@@ -72,6 +73,19 @@ export default function App() {
   useEffect(() => {
     saveRecentFiles(recentFiles);
   }, [recentFiles]);
+
+  // Autosave: Periodically save if there are unsaved changes
+  useEffect(() => {
+    if (!autosaveEnabled || !unsavedChanges) return;
+
+    const autosaveTimer = setTimeout(() => {
+      setFiles(prev => updateFileContent(prev, activeFile, content));
+      setUnsavedChanges(false);
+      setLastSaveTime(new Date());
+    }, autosaveInterval);
+
+    return () => clearTimeout(autosaveTimer);
+  }, [autosaveEnabled, autosaveInterval, unsavedChanges, activeFile, content]);
 
   // Compilation
   const runCompilation = useCallback(() => {
@@ -273,6 +287,10 @@ export default function App() {
   const handleToggleTheme = useCallback(() => {
     updateSettings({ theme: theme === 'dark' ? 'light' : 'dark' });
   }, [theme, updateSettings]);
+
+  const handleToggleAutosave = useCallback(() => {
+    updateSettings({ autosaveEnabled: !autosaveEnabled });
+  }, [autosaveEnabled, updateSettings]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -536,6 +554,8 @@ export default function App() {
           onResetZoom={handleResetZoom}
           onToggleTheme={handleToggleTheme}
           editorZoom={editorZoom}
+          autosaveEnabled={autosaveEnabled}
+          onToggleAutosave={handleToggleAutosave}
         />
         <div className="flex items-center gap-2">
           <button

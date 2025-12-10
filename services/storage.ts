@@ -24,6 +24,8 @@ const DEFAULT_SETTINGS: AppSettings = {
   previewVisible: true,
   editorZoom: 100,
   theme: 'dark',
+  autosaveEnabled: true,
+  autosaveInterval: 5000, // 5 seconds
 };
 
 export function generateFileId(): string {
