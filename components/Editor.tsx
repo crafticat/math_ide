@@ -221,6 +221,63 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
       const { selectionStart, selectionEnd } = e.currentTarget;
       const hasSelection = selectionStart !== selectionEnd;
 
+      // Smart Backspace: Delete matching bracket pairs
+      if (e.key === 'Backspace' && !hasSelection && selectionStart > 0) {
+          const charBefore = content[selectionStart - 1];
+          const charAfter = content[selectionStart];
+
+          // Check if we're between matching brackets: () [] {} "" '' ``
+          if (bracketPairs[charBefore] && charAfter === bracketPairs[charBefore]) {
+              e.preventDefault();
+              const newContent = content.substring(0, selectionStart - 1) + content.substring(selectionStart + 1);
+              onChange(newContent);
+
+              setTimeout(() => {
+                  if (textareaRef.current) {
+                      textareaRef.current.focus();
+                      textareaRef.current.setSelectionRange(selectionStart - 1, selectionStart - 1);
+                  }
+              }, 0);
+              return;
+          }
+      }
+
+      // Smart Delete: Delete matching bracket pairs (forward delete)
+      if (e.key === 'Delete' && !hasSelection && selectionStart < content.length) {
+          const charAt = content[selectionStart];
+          const charAfter = content[selectionStart + 1];
+
+          // Check if we're deleting an opening bracket followed by its closing bracket
+          if (bracketPairs[charAt] && charAfter === bracketPairs[charAt]) {
+              e.preventDefault();
+              const newContent = content.substring(0, selectionStart) + content.substring(selectionStart + 2);
+              onChange(newContent);
+
+              setTimeout(() => {
+                  if (textareaRef.current) {
+                      textareaRef.current.focus();
+                      textareaRef.current.setSelectionRange(selectionStart, selectionStart);
+                  }
+              }, 0);
+              return;
+          }
+      }
+
+      // Skip over closing brackets if typing them when already present
+      const closingBrackets: Record<string, string> = { ')': '(', ']': '[', '}': '{', '"': '"', "'": "'", '`': '`' };
+      if (closingBrackets[e.key] && !hasSelection) {
+          const charAfter = content[selectionStart];
+          if (charAfter === e.key) {
+              e.preventDefault();
+              const textarea = e.currentTarget;
+              // Just move cursor forward, don't insert
+              requestAnimationFrame(() => {
+                  textarea.setSelectionRange(selectionStart + 1, selectionStart + 1);
+              });
+              return;
+          }
+      }
+
       if (bracketPairs[e.key]) {
           e.preventDefault();
           const textarea = e.currentTarget;
