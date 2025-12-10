@@ -190,13 +190,13 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
       setCursorPos({ top: top + currentLineHeight, left: left });
   };
 
-  // Bracket pairs for wrapping selection
+  // Bracket pairs for wrapping selection and auto-closing
+  // Note: Single quote ' is excluded to avoid issues with contractions (don't, it's, etc.)
   const bracketPairs: Record<string, string> = {
       '(': ')',
       '[': ']',
       '{': '}',
       '"': '"',
-      "'": "'",
       '`': '`',
   };
 
@@ -269,7 +269,7 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
       }
 
       // Skip over closing brackets if typing them when already present
-      const closingBrackets: Record<string, string> = { ')': '(', ']': '[', '}': '{', '"': '"', "'": "'", '`': '`' };
+      const closingBrackets: Record<string, string> = { ')': '(', ']': '[', '}': '{', '"': '"', '`': '`' };
       if (closingBrackets[e.key] && !hasSelection) {
           const charAfter = content[selectionStart];
           if (charAfter === e.key) {
@@ -283,8 +283,9 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
           }
       }
 
-      // Symmetric quotes (', ", `) need special handling
-      const symmetricQuotes = new Set(["'", '"', '`']);
+      // Symmetric quotes (", `) need special handling
+      // Note: Single quote excluded to avoid issues with contractions
+      const symmetricQuotes = new Set(['"', '`']);
 
       if (bracketPairs[e.key]) {
           const textarea = e.currentTarget;
