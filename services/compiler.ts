@@ -13,15 +13,50 @@ export const compileMathScript = (input: string): CompilationResult => {
   // --- CONFIGURATION ---
 
   // 1. Math Keywords (Reserved words that are ALWAYS math/symbols)
+  // Note: 'and', 'or', 'not' (lowercase) are handled separately with context detection
+  // BUT uppercase 'AND', 'OR', 'NOT' are ALWAYS logic operators
   const mathKeywords = new Set([
       'integral', 'sum', 'lim', 'sup', 'inf', 'log', 'ln', 'sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'sqrt',
       'floor', 'ceil',
       'exists', 'forall', 'in', 'notin', 'subset', 'union', 'intersect', 'implies', 'iff', 'suchthat',
-      'AND', 'OR', 'NOT', 'and', 'or', 'not',
+      'AND', 'OR', 'NOT',  // Uppercase = explicit logic, always symbols
       'delta', 'alpha', 'beta', 'gamma', 'epsilon', 'theta', 'lambda', 'sigma', 'omega', 'pi', 'mu', 'phi', 'rho', 'tau', 'zeta', 'eta', 'chi', 'psi', 'nu', 'kappa', 'iota', 'xi', 'upsilon',
       'Delta', 'Gamma', 'Theta', 'Lambda', 'Sigma', 'Omega', 'Pi', 'Phi', 'Psi', 'Xi',
       'dx', 'dy', 'dz', 'dt', 'du', 'dv',
       'QED', 'Math', 'det', 'max', 'min'
+  ]);
+
+  // Words that indicate we're in prose/English context (not logic)
+  const proseIndicatorsBefore = new Set([
+      'is', 'are', 'was', 'were', 'be', 'been', 'being',
+      'have', 'has', 'had', 'do', 'does', 'did',
+      'can', 'could', 'may', 'might', 'will', 'would', 'shall', 'should', 'must',
+      'let', 'assume', 'suppose', 'show', 'prove', 'find', 'define', 'solve', 'simplify',
+      'calculate', 'compute', 'determine', 'verify', 'check',
+      'both', 'either', 'neither', 'whether', 'if', 'when', 'where', 'while',
+      'sets', 'functions', 'matrices', 'vectors', 'numbers', 'integers', 'values',
+      'continuous', 'bounded', 'positive', 'negative', 'equal', 'zero',
+      'true', 'false', 'yes', 'no', 'one', 'more', 'two', 'all', 'any', 'some',
+  ]);
+
+  // Words that indicate we're in prose/English context when they follow and/or/not
+  const proseIndicatorsAfter = new Set([
+      'is', 'are', 'was', 'were', 'be', 'been', 'being',
+      'have', 'has', 'had', 'do', 'does', 'did', 'exist', 'exists',
+      'can', 'could', 'may', 'might', 'will', 'would', 'shall', 'should', 'must',
+      'the', 'a', 'an', 'this', 'that', 'these', 'those',
+      'continuous', 'differentiable', 'integrable', 'bounded', 'convergent', 'divergent',
+      'positive', 'negative', 'zero', 'equal', 'defined', 'undefined',
+      'finite', 'infinite', 'empty', 'non', 'greater', 'smaller', 'less',
+      'only', 'both', 'always', 'necessarily', 'limited', 'similar',
+      'simplify', 'solve', 'disprove', 'integers', 'real', 'complex',
+  ]);
+
+  // Logic context indicators (tokens that suggest we're in a logical expression)
+  const logicIndicators = new Set([
+      'forall', 'exists', 'suchthat', 'implies', 'iff',
+      '=>', '<=>', '!=',
+      'in', 'notin', 'subset', 'union', 'intersect',
   ]);
 
   // 2. Direct Replacements for Keywords -> LaTeX
@@ -74,12 +109,16 @@ export const compileMathScript = (input: string): CompilationResult => {
 
   // 4. Text Stop Words (Always render as text)
   // Note: 'a' is NOT included - it should be a math variable in most contexts
+  // Note: 'and', 'or', 'not' are NOT included - they use context detection
   const textStopWords = new Set([
-      'is', 'the', 'of', 'and', 'or', 'if', 'then', 'else', 'for', 'with',
+      'is', 'the', 'of', 'if', 'then', 'else', 'for', 'with',
       'to', 'on', 'at', 'by', 'be', 'let', 'assume', 'suppose', 'since', 'because', 'therefore', 'thus', 'hence',
       'so', 'we', 'have', 'show', 'prove', 'find', 'calculate', 'compute', 'given', 'where', 'when', 'that', 'this', 'it',
       'continuous', 'differentiable', 'integrable', 'bounded', 'converges', 'diverges', 'function', 'set', 'sequence', 'series',
-      'exist', 'non', 'empty', 'no', 'any', 'can', 'there' // Added common prose words
+      'exist', 'non', 'empty', 'no', 'any', 'can', 'there', 'but', 'also', 'only', 'either', 'neither',
+      'does', 'do', 'has', 'are', 'was', 'were', 'been', 'being',
+      'may', 'might', 'could', 'would', 'should', 'must', 'shall', 'will',
+      'true', 'false', 'yes', 'no', 'both', 'all', 'some', 'each', 'every', 'none',
   ]);
 
   lines.forEach((line, index) => {
@@ -979,7 +1018,10 @@ export const compileMathScript = (input: string): CompilationResult => {
         }
 
         // Keywords -> MATH
-        if (mathKeywords.has(cleanToken) || symbolMap[cleanToken]) {
+        // Note: 'and', 'or', 'not' (lowercase) are handled separately with context detection below
+        const contextSensitiveWords = new Set(['and', 'or', 'not']);
+        if (!contextSensitiveWords.has(cleanToken.toLowerCase()) &&
+            (mathKeywords.has(cleanToken) || symbolMap[cleanToken])) {
             segments.push({ type: 'MATH', content: symbolMap[cleanToken] || cleanToken });
             continue;
         }
@@ -987,11 +1029,166 @@ export const compileMathScript = (input: string): CompilationResult => {
         // --- HEURISTIC TEXT DETECTION ---
         // 1. Is it a stop word? (is, the, let...)
         if (textStopWords.has(cleanToken.toLowerCase())) {
-             segments.push({ type: 'TEXT', content: token }); 
+             segments.push({ type: 'TEXT', content: token });
              continue;
         }
 
-        // 2. Handle single character 'a' - could be article or variable
+        // 2. Handle "and", "or", "not" with context detection
+        // These can be either English words or logical operators depending on context
+        const lowerToken = cleanToken.toLowerCase();
+        if (lowerToken === 'and' || lowerToken === 'or' || lowerToken === 'not') {
+            // Helper to get the nearest non-space, non-punctuation word in a direction
+            const getNearbyWord = (direction: 'before' | 'after'): string | null => {
+                let j = direction === 'before' ? i - 1 : i + 1;
+                const step = direction === 'before' ? -1 : 1;
+                while (j >= 0 && j < rawTokens.length) {
+                    const t = rawTokens[j].trim();
+                    // Skip spaces and punctuation
+                    if (t && !/^\s+$/.test(rawTokens[j]) && !/^[,.:;!?()\[\]]+$/.test(t)) {
+                        return t.toLowerCase();
+                    }
+                    j += step;
+                }
+                return null;
+            };
+
+            // Helper to check if there's a comma immediately before
+            const hasCommaBefore = (): boolean => {
+                for (let j = i - 1; j >= 0; j--) {
+                    const t = rawTokens[j].trim();
+                    if (!t || /^\s+$/.test(rawTokens[j])) continue;
+                    return t === ',' || t.endsWith(',');
+                }
+                return false;
+            };
+
+            const wordBefore = getNearbyWord('before');
+            const wordAfter = getNearbyWord('after');
+
+            // Check for logic indicators in the entire line
+            const lineHasLogicIndicator =
+                processedLine.includes('=>') ||
+                processedLine.includes('<=>') ||
+                /\b(forall|exists|suchthat|notin)\b/i.test(processedLine) ||
+                /\bin\s+[A-Z]\b/.test(processedLine);  // "in A" pattern (set membership)
+
+            // Check if surrounded by single-letter variables (logic context)
+            const beforeIsSingleVar = wordBefore && wordBefore.length === 1 && /^[a-z]$/i.test(wordBefore);
+            const afterIsSingleVar = wordAfter && wordAfter.length === 1 && /^[a-z]$/i.test(wordAfter);
+
+            // Check if word is a multi-char English word (prose)
+            const isProseWord = (word: string | null): boolean => {
+                if (!word) return false;
+                if (word.length <= 1) return false;
+                if (mathKeywords.has(word)) return false;
+                if (symbolMap[word]) return false;
+                // Greek letters are not prose
+                if (['alpha', 'beta', 'gamma', 'delta', 'epsilon', 'theta', 'lambda', 'sigma', 'omega', 'pi'].includes(word)) return false;
+                return true;
+            };
+
+            const beforeIsProse = isProseWord(wordBefore);
+            const afterIsProse = isProseWord(wordAfter);
+
+            // Check if line contains prose words (excluding and/or/not and math keywords)
+            const lineContainsProse = rawTokens.some(t => {
+                const w = t.trim().toLowerCase();
+                if (!w || /^\s+$/.test(t) || /^[,.:;!?()\[\]=<>+\-*/]+$/.test(w)) return false;
+                if (w.length <= 1) return false;
+                if (contextSensitiveWords.has(w)) return false;
+                if (mathKeywords.has(w) || mathKeywords.has(t.trim())) return false;
+                if (symbolMap[w]) return false;
+                return true;  // Multi-char word that isn't a math keyword
+            });
+
+            // Decision logic (ordered by priority):
+
+            // 1. UPPERCASE versions -> always LOGIC (already handled by mathKeywords)
+
+            // 2. Oxford comma context ", and" or ", or" -> TEXT
+            if (hasCommaBefore()) {
+                segments.push({ type: 'TEXT', content: token });
+                continue;
+            }
+
+            // 3. If BOTH neighbors are multi-char prose words -> TEXT
+            //    e.g., "apples and oranges", "continuous and differentiable"
+            if (beforeIsProse && afterIsProse) {
+                segments.push({ type: 'TEXT', content: token });
+                continue;
+            }
+
+            // 4. Special patterns for "not":
+            //    - "not" followed by common verbs/adjectives -> TEXT
+            //    - "not" at start followed by prose -> TEXT
+            if (lowerToken === 'not') {
+                const notFollowedByProse = ['exist', 'exists', 'equal', 'defined', 'undefined',
+                    'converge', 'converges', 'diverge', 'diverges',
+                    'always', 'necessarily', 'only', 'both', 'limited',
+                    'the', 'a', 'an', 'be', 'have'];
+                if (wordAfter && (notFollowedByProse.includes(wordAfter) || afterIsProse)) {
+                    segments.push({ type: 'TEXT', content: token });
+                    continue;
+                }
+            }
+
+            // 5. If one neighbor is prose and other is single var, check context:
+            //    - "find x and y" -> word before "x" is "find" (instruction) -> TEXT
+            //    - "let a and b be" -> TEXT (common math phrase)
+            if ((beforeIsSingleVar && afterIsSingleVar) === false) {
+                // Mixed context - need to look further
+                if (beforeIsProse || afterIsProse) {
+                    segments.push({ type: 'TEXT', content: token });
+                    continue;
+                }
+            }
+
+            // 6. If line has explicit logic indicators AND both neighbors are single vars -> LOGIC
+            //    e.g., "forall x, p and q", "x in A and y in B"
+            if (lineHasLogicIndicator && beforeIsSingleVar && afterIsSingleVar) {
+                segments.push({ type: 'MATH', content: symbolMap[lowerToken] || token });
+                continue;
+            }
+
+            // 7. If BOTH neighbors are single-letter variables BUT line has prose -> TEXT
+            //    e.g., "let a and b be real numbers", "find x and y", "x and y are integers"
+            if (beforeIsSingleVar && afterIsSingleVar && lineContainsProse && !lineHasLogicIndicator) {
+                segments.push({ type: 'TEXT', content: token });
+                continue;
+            }
+
+            // 8. If BOTH neighbors are single-letter variables with NO prose context -> LOGIC
+            //    e.g., "p and q", "A or B"
+            if (beforeIsSingleVar && afterIsSingleVar) {
+                segments.push({ type: 'MATH', content: symbolMap[lowerToken] || token });
+                continue;
+            }
+
+            // 9. If "not" followed by single var (and no prose context) -> LOGIC
+            if (lowerToken === 'not' && afterIsSingleVar && !beforeIsProse && !lineContainsProse) {
+                segments.push({ type: 'MATH', content: symbolMap[lowerToken] || token });
+                continue;
+            }
+
+            // 10. Line has logic indicators (forall, exists, =>, <=>) -> lean towards LOGIC
+            if (lineHasLogicIndicator && !beforeIsProse && !afterIsProse) {
+                segments.push({ type: 'MATH', content: symbolMap[lowerToken] || token });
+                continue;
+            }
+
+            // 11. Default: If any neighbor is prose or multi-char word -> TEXT
+            //     Otherwise -> LOGIC (surrounded by short tokens)
+            if (beforeIsProse || afterIsProse || lineContainsProse ||
+                (wordBefore && wordBefore.length > 1) ||
+                (wordAfter && wordAfter.length > 1)) {
+                segments.push({ type: 'TEXT', content: token });
+            } else {
+                segments.push({ type: 'MATH', content: symbolMap[lowerToken] || token });
+            }
+            continue;
+        }
+
+        // 3. Handle single character 'a' - could be article or variable
         // If followed by space + text word (not a math keyword), it's likely the article
         if (cleanToken === 'a' || cleanToken === 'A') {
             // Look ahead: space followed by text?
