@@ -37,6 +37,19 @@ export const symbolMap: Record<string, string> = {
   // Special
   'inf': '\\infty',
   'QED': '\\quad \\blacksquare',
+
+  // Geometry
+  'perp': '\\perp',
+  'parallel': '\\parallel',
+  'angle': '\\angle',
+  'measuredangle': '\\measuredangle',
+  'sphericalangle': '\\sphericalangle',
+  'rightangle': '\\measuredangle',
+  'degree': '^{\\circ}',
+  'congruent': '\\cong',
+  'similar': '\\sim',
+  'corresponds': '\\triangleq',
+  'triangle': '\\triangle',
 };
 
 // Greek letters
@@ -113,6 +126,13 @@ export const functionPatterns: { syntax: string; output: string; description: st
   { syntax: 'integral(a -> b)', output: '\\int_{a}^{b}', description: 'Definite integral' },
   { syntax: 'sum(i=1 -> n)', output: '\\sum_{i=1}^{n}', description: 'Summation' },
   { syntax: 'lim(x -> 0)', output: '\\lim_{x \\to 0}', description: 'Limit' },
+];
+
+// Geometry function patterns
+export const geometryFunctionPatterns: { syntax: string; output: string; description: string }[] = [
+  { syntax: 'overline(AB)', output: '\\overline{AB}', description: 'Line segment' },
+  { syntax: 'ray(AB)', output: '\\overrightarrow{AB}', description: 'Ray' },
+  { syntax: 'arc(AB)', output: '\\overset{\\frown}{AB}', description: 'Arc' },
 ];
 
 // Basic math patterns
@@ -205,6 +225,19 @@ export function generateSyntaxReference(): SyntaxCategory[] {
         { syntax: 'union', output: symbolMap['union'], description: 'Union' },
         { syntax: 'intersect', output: symbolMap['intersect'], description: 'Intersection' },
         { syntax: '{x in R : x > 0}', output: '\\{x \\in R \\mid x > 0\\}', description: 'Set builder' },
+      ],
+    },
+    {
+      title: 'Geometry',
+      items: [
+        { syntax: 'perp', output: symbolMap['perp'], description: 'Perpendicular' },
+        { syntax: 'parallel', output: symbolMap['parallel'], description: 'Parallel' },
+        { syntax: 'angle', output: symbolMap['angle'], description: 'Angle' },
+        { syntax: 'triangle', output: symbolMap['triangle'], description: 'Triangle' },
+        { syntax: 'congruent', output: symbolMap['congruent'], description: 'Congruent' },
+        { syntax: 'similar', output: symbolMap['similar'], description: 'Similar' },
+        { syntax: 'degree', output: symbolMap['degree'], description: 'Degree' },
+        ...geometryFunctionPatterns,
       ],
     },
     {

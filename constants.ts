@@ -276,7 +276,21 @@ export const AUTOCOMPLETE_DATA = [
     { label: 'subset', type: 'operator', insert: 'subset' },
     { label: 'union', type: 'operator', insert: 'union' },
     { label: 'intersect', type: 'operator', insert: 'intersect' },
-    
+
+    // Geometry
+    { label: 'perp', type: 'operator', insert: 'perp' },
+    { label: 'parallel', type: 'operator', insert: 'parallel' },
+    { label: 'angle', type: 'operator', insert: 'angle ' },
+    { label: 'triangle', type: 'operator', insert: 'triangle ' },
+    { label: 'congruent', type: 'operator', insert: 'congruent' },
+    { label: 'similar', type: 'operator', insert: 'similar' },
+    { label: 'degree', type: 'operator', insert: 'degree' },
+    { label: 'measuredangle', type: 'operator', insert: 'measuredangle ' },
+    { label: 'corresponds', type: 'operator', insert: 'corresponds' },
+    { label: 'overline', type: 'function', insert: 'overline($0)' },
+    { label: 'ray', type: 'function', insert: 'ray($0)' },
+    { label: 'arc', type: 'function', insert: 'arc($0)' },
+
     // Common Words
     { label: 'because', type: 'text', insert: 'because' },
     { label: 'since', type: 'text', insert: 'since' },

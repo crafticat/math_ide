@@ -23,7 +23,10 @@ export const compileMathScript = (input: string): CompilationResult => {
       'delta', 'alpha', 'beta', 'gamma', 'epsilon', 'theta', 'lambda', 'sigma', 'omega', 'pi', 'mu', 'phi', 'rho', 'tau', 'zeta', 'eta', 'chi', 'psi', 'nu', 'kappa', 'iota', 'xi', 'upsilon',
       'Delta', 'Gamma', 'Theta', 'Lambda', 'Sigma', 'Omega', 'Pi', 'Phi', 'Psi', 'Xi',
       'dx', 'dy', 'dz', 'dt', 'du', 'dv',
-      'QED', 'Math', 'det', 'max', 'min'
+      'QED', 'Math', 'det', 'max', 'min',
+      // Geometry
+      'perp', 'parallel', 'angle', 'measuredangle', 'sphericalangle', 'rightangle',
+      'degree', 'congruent', 'triangle', 'corresponds',
   ]);
 
   // Words that indicate we're in prose/English context (not logic)
@@ -95,8 +98,20 @@ export const compileMathScript = (input: string): CompilationResult => {
       'delta': '\\delta', 'alpha': '\\alpha', 'beta': '\\beta', 'gamma': '\\gamma', 'epsilon': '\\epsilon', 
       'theta': '\\theta', 'lambda': '\\lambda', 'sigma': '\\sigma', 'omega': '\\omega', 'pi': '\\pi',
       'mu': '\\mu', 'phi': '\\phi', 'rho': '\\rho', 'tau': '\\tau', 'zeta': '\\zeta', 'eta': '\\eta',
-      'Delta': '\\Delta', 'Gamma': '\\Gamma', 'Theta': '\\Theta', 'Lambda': '\\Lambda', 
-      'Sigma': '\\Sigma', 'Omega': '\\Omega', 'Pi': '\\Pi', 'Phi': '\\Phi'
+      'Delta': '\\Delta', 'Gamma': '\\Gamma', 'Theta': '\\Theta', 'Lambda': '\\Lambda',
+      'Sigma': '\\Sigma', 'Omega': '\\Omega', 'Pi': '\\Pi', 'Phi': '\\Phi',
+      // Geometry
+      'perp': '\\perp',
+      'parallel': '\\parallel',
+      'angle': '\\angle',
+      'measuredangle': '\\measuredangle',
+      'sphericalangle': '\\sphericalangle',
+      'rightangle': '\\measuredangle',
+      'degree': '^{\\circ}',
+      'congruent': '\\cong',
+      'similar': '\\sim',
+      'corresponds': '\\triangleq',
+      'triangle': '\\triangle',
   };
 
   // 3. Math Package Mappings
@@ -583,6 +598,21 @@ export const compileMathScript = (input: string): CompilationResult => {
     // Vector: vec(x) -> \vec{x}
     processedLine = processedLine.replace(/vec\s*\(\s*([^)]+)\s*\)/g, (_, content) => {
         return addPlaceholder(`\\vec{${processContent(content)}}`);
+    });
+
+    // Geometry: overline(AB) -> \overline{AB} (line segment)
+    processedLine = processedLine.replace(/overline\s*\(\s*([^)]+)\s*\)/g, (_, content) => {
+        return addPlaceholder(`\\overline{${processContent(content)}}`);
+    });
+
+    // Geometry: ray(AB) -> \overrightarrow{AB}
+    processedLine = processedLine.replace(/ray\s*\(\s*([^)]+)\s*\)/g, (_, content) => {
+        return addPlaceholder(`\\overrightarrow{${processContent(content)}}`);
+    });
+
+    // Geometry: arc(AB) -> \overset{\frown}{AB}
+    processedLine = processedLine.replace(/arc\s*\(\s*([^)]+)\s*\)/g, (_, content) => {
+        return addPlaceholder(`\\overset{\\frown}{${processContent(content)}}`);
     });
 
     // Helper to find matching closing paren for function calls
