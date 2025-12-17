@@ -38,6 +38,11 @@ export const symbolMap: Record<string, string> = {
   'inf': '\\infty',
   'QED': '\\quad \\blacksquare',
 
+  // PDE/Calculus
+  'partial': '\\partial',
+  'eps': '\\varepsilon',
+  'divides': '\\text{divides}',
+
   // Geometry
   'perp': '\\perp',
   'parallel': '\\parallel',
@@ -121,11 +126,22 @@ export const functionPatterns: { syntax: string; output: string; description: st
   { syntax: 'floor(x)', output: '\\lfloor x \\rfloor', description: 'Floor function' },
   { syntax: 'ceil(x)', output: '\\lceil x \\rceil', description: 'Ceiling function' },
   { syntax: 'vec(v)', output: '\\vec{v}', description: 'Vector arrow' },
+  { syntax: 'hat(x)', output: '\\hat{x}', description: 'Hat accent' },
+  { syntax: 'bar(x)', output: '\\bar{x}', description: 'Bar accent' },
+  { syntax: 'tilde(x)', output: '\\tilde{x}', description: 'Tilde accent' },
   { syntax: 'factorial(n)', output: 'n!', description: 'Factorial' },
   { syntax: 'choose(n, k)', output: '\\binom{n}{k}', description: 'Binomial coefficient' },
   { syntax: 'integral(a -> b)', output: '\\int_{a}^{b}', description: 'Definite integral' },
   { syntax: 'sum(i=1 -> n)', output: '\\sum_{i=1}^{n}', description: 'Summation' },
   { syntax: 'lim(x -> 0)', output: '\\lim_{x \\to 0}', description: 'Limit' },
+];
+
+// Environment patterns (cases, matrix)
+export const environmentPatterns: { syntax: string; output: string; description: string }[] = [
+  { syntax: 'cases { a; b; c }', output: '\\begin{cases}a \\\\ b \\\\ c\\end{cases}', description: 'Piecewise cases' },
+  { syntax: 'matrix([[a,b],[c,d]])', output: '\\begin{pmatrix}a & b \\\\ c & d\\end{pmatrix}', description: 'Matrix (parens)' },
+  { syntax: 'bmatrix([[a,b],[c,d]])', output: '\\begin{bmatrix}a & b \\\\ c & d\\end{bmatrix}', description: 'Matrix (brackets)' },
+  { syntax: 'vmatrix([[a,b],[c,d]])', output: '\\begin{vmatrix}a & b \\\\ c & d\\end{vmatrix}', description: 'Determinant' },
 ];
 
 // Geometry function patterns
@@ -180,9 +196,17 @@ export function generateSyntaxReference(): SyntaxCategory[] {
     },
     {
       title: 'Calculus',
-      items: functionPatterns.filter(p =>
-        ['integral', 'sum', 'lim'].some(c => p.syntax.startsWith(c))
-      ),
+      items: [
+        ...functionPatterns.filter(p =>
+          ['integral', 'sum', 'lim'].some(c => p.syntax.startsWith(c))
+        ),
+        { syntax: 'partial', output: symbolMap['partial'], description: 'Partial derivative' },
+        { syntax: 'eps', output: symbolMap['eps'], description: 'Epsilon (shorthand)' },
+      ],
+    },
+    {
+      title: 'Environments',
+      items: environmentPatterns,
     },
     {
       title: 'Greek Letters',

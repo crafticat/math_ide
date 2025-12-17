@@ -269,6 +269,19 @@ export const AUTOCOMPLETE_DATA = [
     { label: 'choose', type: 'function', insert: 'choose($0, )' },
     { label: 'floor', type: 'function', insert: 'floor($0)' },
     { label: 'ceil', type: 'function', insert: 'ceil($0)' },
+    { label: 'partial', type: 'operator', insert: 'partial' },
+    { label: 'eps', type: 'greek', insert: 'eps' },
+
+    // Accents
+    { label: 'hat', type: 'function', insert: 'hat($0)' },
+    { label: 'bar', type: 'function', insert: 'bar($0)' },
+    { label: 'tilde', type: 'function', insert: 'tilde($0)' },
+
+    // Environments
+    { label: 'cases', type: 'keyword', insert: 'cases { $0; }' },
+    { label: 'matrix', type: 'function', insert: 'matrix([[$0]])' },
+    { label: 'bmatrix', type: 'function', insert: 'bmatrix([[$0]])' },
+    { label: 'vmatrix', type: 'function', insert: 'vmatrix([[$0]])' },
     
     // Set Theory
     { label: 'in', type: 'operator', insert: 'in' },

@@ -2,7 +2,27 @@
 import { CompilationResult, LogEntry } from '../types';
 
 export const compileMathScript = (input: string): CompilationResult => {
-  const lines = input.split('\n');
+  // Preprocess: Join multi-line cases { } and matrix() blocks into single lines
+  let preprocessed = input;
+
+  // Handle multi-line cases { ... }
+  // Find "cases {" and join lines until matching "}"
+  preprocessed = preprocessed.replace(/\bcases\s*\{([^}]*)\}/gs, (match, content) => {
+    // Replace newlines with semicolons (if not already ending with semicolon)
+    const lines = content.split('\n').map((l: string) => l.trim()).filter((l: string) => l);
+    // Join with semicolons, but don't add if line already ends with semicolon
+    const joined = lines.map((l: string) => l.endsWith(';') ? l.slice(0, -1) : l).join('; ');
+    return `cases { ${joined} }`;
+  });
+
+  // Handle multi-line matrix([[...]])
+  preprocessed = preprocessed.replace(/\b(matrix|bmatrix|vmatrix)\s*\(\s*\[\s*\[([^\]]*(?:\][^\]]*)*)\]\s*\]\s*\)/gs, (match, fnName, content) => {
+    // Remove newlines from matrix content
+    const cleaned = content.replace(/\s*\n\s*/g, ' ');
+    return `${fnName}([[${cleaned}]])`;
+  });
+
+  const lines = preprocessed.split('\n');
   const macros: Record<string, string> = {};
   const outputLines: { id: string; latex: string; originalLine: number }[] = [];
   const logs: LogEntry[] = [];
@@ -17,7 +37,7 @@ export const compileMathScript = (input: string): CompilationResult => {
   // BUT uppercase 'AND', 'OR', 'NOT' are ALWAYS logic operators
   const mathKeywords = new Set([
       'integral', 'sum', 'lim', 'sup', 'inf', 'log', 'ln', 'sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'sqrt',
-      'floor', 'ceil',
+      'floor', 'ceil', 'partial', 'eps',
       'exists', 'forall', 'in', 'notin', 'subset', 'union', 'intersect', 'implies', 'iff', 'suchthat',
       'AND', 'OR', 'NOT',  // Uppercase = explicit logic, always symbols
       'delta', 'alpha', 'beta', 'gamma', 'epsilon', 'theta', 'lambda', 'sigma', 'omega', 'pi', 'mu', 'phi', 'rho', 'tau', 'zeta', 'eta', 'chi', 'psi', 'nu', 'kappa', 'iota', 'xi', 'upsilon',
@@ -112,6 +132,9 @@ export const compileMathScript = (input: string): CompilationResult => {
       'similar': '\\sim',
       'corresponds': '\\triangleq',
       'triangle': '\\triangle',
+      // PDE/Calculus
+      'partial': '\\partial',
+      'eps': '\\varepsilon',
   };
 
   // 3. Math Package Mappings
@@ -262,6 +285,22 @@ export const compileMathScript = (input: string): CompilationResult => {
         let i = 0;
         while (i < line.length) {
             if (line[i] === '{') {
+                // Check if this is a cases environment - skip it entirely
+                const before = line.substring(0, i);
+                if (/\bcases\s*$/.test(before)) {
+                    // Find matching closing brace and pass through unchanged
+                    let depth = 1;
+                    let j = i + 1;
+                    while (j < line.length && depth > 0) {
+                        if (line[j] === '{') depth++;
+                        else if (line[j] === '}') depth--;
+                        j++;
+                    }
+                    // Include the entire cases { ... } block unchanged
+                    result += line.substring(i, j);
+                    i = j;
+                    continue;
+                }
                 // Find matching closing brace
                 let depth = 1;
                 let j = i + 1;
@@ -600,6 +639,21 @@ export const compileMathScript = (input: string): CompilationResult => {
         return addPlaceholder(`\\vec{${processContent(content)}}`);
     });
 
+    // Hat accent: hat(x) -> \hat{x}
+    processedLine = processedLine.replace(/hat\s*\(\s*([^)]+)\s*\)/g, (_, content) => {
+        return addPlaceholder(`\\hat{${processContent(content)}}`);
+    });
+
+    // Bar accent: bar(x) -> \bar{x}
+    processedLine = processedLine.replace(/bar\s*\(\s*([^)]+)\s*\)/g, (_, content) => {
+        return addPlaceholder(`\\bar{${processContent(content)}}`);
+    });
+
+    // Tilde accent: tilde(x) -> \tilde{x}
+    processedLine = processedLine.replace(/tilde\s*\(\s*([^)]+)\s*\)/g, (_, content) => {
+        return addPlaceholder(`\\tilde{${processContent(content)}}`);
+    });
+
     // Geometry: overline(AB) -> \overline{AB} (line segment)
     processedLine = processedLine.replace(/overline\s*\(\s*([^)]+)\s*\)/g, (_, content) => {
         return addPlaceholder(`\\overline{${processContent(content)}}`);
@@ -784,6 +838,167 @@ export const compileMathScript = (input: string): CompilationResult => {
         }
         return addPlaceholder(`${processed}!`);
     });
+
+    // Matrix: matrix([[a,b],[c,d]]) -> \begin{pmatrix}a & b \\ c & d\end{pmatrix}
+    // Also supports bmatrix for bracket matrix: bmatrix([[a,b],[c,d]]) -> \begin{bmatrix}...\end{bmatrix}
+    const parseMatrixContent = (content: string): string[][] => {
+        // Parse [[a,b],[c,d]] format
+        // Remove outer brackets
+        const trimmed = content.trim();
+        if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) {
+            return [[content]]; // Fallback: treat as single cell
+        }
+
+        const inner = trimmed.slice(1, -1).trim();
+        const rows: string[][] = [];
+        let depth = 0;
+        let currentRow = '';
+        let i = 0;
+
+        while (i < inner.length) {
+            const ch = inner[i];
+            if (ch === '[') {
+                if (depth === 0) {
+                    // Start of a row
+                    currentRow = '';
+                }
+                depth++;
+                if (depth > 1) currentRow += ch;
+            } else if (ch === ']') {
+                depth--;
+                if (depth === 0) {
+                    // End of a row - parse cells
+                    const cells = currentRow.split(',').map(c => c.trim());
+                    rows.push(cells);
+                } else {
+                    currentRow += ch;
+                }
+            } else if (ch === ',' && depth === 0) {
+                // Skip comma between rows
+            } else {
+                if (depth > 0) currentRow += ch;
+            }
+            i++;
+        }
+
+        return rows;
+    };
+
+    const handleMatrixEnvironment = (line: string, fnName: string, envName: string): string => {
+        const pattern = new RegExp(`\\b${fnName}\\s*\\(`, 'g');
+        let result = '';
+        let lastIndex = 0;
+        let match;
+
+        while ((match = pattern.exec(line)) !== null) {
+            result += line.substring(lastIndex, match.index);
+            const openParen = match.index + match[0].length - 1;
+            const closeParen = findClosingParen(line, openParen);
+
+            if (closeParen !== -1) {
+                const content = line.substring(openParen + 1, closeParen);
+                const rows = parseMatrixContent(content);
+                // Process each cell with full symbol replacement (Greek first, then subscripts)
+                const latexRows = rows.map(row =>
+                    row.map(cell => {
+                        let processed = cell;
+                        // Apply Greek letters BEFORE subscript processing
+                        // Use lookahead to also match before _ (subscript)
+                        Object.entries(greekLetters).forEach(([name, latex]) => {
+                            processed = processed.replace(new RegExp(`(?<!\\\\)\\b${name}(?=[_\\^\\s=<>+\\-*/\\)\\],;]|$)`, 'g'), latex);
+                        });
+                        // Apply partial/eps and other symbols
+                        processed = processed.replace(/\bpartial(?=[_\^\s=<>+\-*/\)\],;]|$)/g, '\\partial');
+                        processed = processed.replace(/\beps(?=[_\^\s=<>+\-*/\)\],;]|$)/g, '\\varepsilon');
+                        processed = processed.replace(/\binf(?=[_\^\s=<>+\-*/\)\],;]|$)/g, '\\infty');
+                        // Now apply subscripts/superscripts
+                        processed = processContent(processed);
+                        return processed;
+                    }).join(' & ')
+                ).join(' \\\\ ');
+                result += addPlaceholder(`\\begin{${envName}}${latexRows}\\end{${envName}}`);
+                lastIndex = closeParen + 1;
+                pattern.lastIndex = closeParen + 1;
+            } else {
+                result += match[0];
+                lastIndex = match.index + match[0].length;
+            }
+        }
+
+        result += line.substring(lastIndex);
+        return result;
+    };
+
+    // Process matrix() -> pmatrix (parentheses)
+    processedLine = handleMatrixEnvironment(processedLine, 'matrix', 'pmatrix');
+    // Process bmatrix() -> bmatrix (brackets)
+    processedLine = handleMatrixEnvironment(processedLine, 'bmatrix', 'bmatrix');
+    // Process vmatrix() -> vmatrix (vertical bars/determinant)
+    processedLine = handleMatrixEnvironment(processedLine, 'vmatrix', 'vmatrix');
+
+    // Cases environment: cases { eq1; eq2; eq3 } -> \begin{cases} eq1 \\ eq2 \\ eq3 \end{cases}
+    // Process recursively to handle nested math in each case
+    const handleCasesEnvironment = (line: string): string => {
+        const casesPattern = /\bcases\s*\{/g;
+        let result = '';
+        let lastIndex = 0;
+        let match;
+
+        while ((match = casesPattern.exec(line)) !== null) {
+            result += line.substring(lastIndex, match.index);
+            const startBrace = match.index + match[0].length - 1;
+
+            // Find matching closing brace
+            let depth = 1;
+            let j = startBrace + 1;
+            while (j < line.length && depth > 0) {
+                if (line[j] === '{') depth++;
+                else if (line[j] === '}') depth--;
+                j++;
+            }
+
+            if (depth === 0) {
+                const content = line.substring(startBrace + 1, j - 1);
+                // Split by semicolons, process each case
+                const casesList = content.split(';').map(c => c.trim()).filter(c => c);
+                // Each case gets full processing (Greek letters first, then subscripts, then spacing)
+                const processedCases = casesList.map(c => {
+                    let processed = c;
+                    // Apply Greek letters BEFORE subscript processing
+                    // Use lookahead to also match before _ (subscript)
+                    Object.entries(greekLetters).forEach(([name, latex]) => {
+                        processed = processed.replace(new RegExp(`(?<!\\\\)\\b${name}(?=[_\\^\\s=<>+\\-*/\\)\\],;]|$)`, 'g'), latex);
+                    });
+                    // Apply partial/eps and other symbols
+                    processed = processed.replace(/\bpartial(?=[_\^\s=<>+\-*/\)\],;]|$)/g, '\\partial');
+                    processed = processed.replace(/\beps(?=[_\^\s=<>+\-*/\)\],;]|$)/g, '\\varepsilon');
+                    processed = processed.replace(/\binf(?=[_\^\s=<>+\-*/\)\],;]|$)/g, '\\infty');
+                    // Now apply subscripts/superscripts
+                    processed = processContent(processed);
+                    // Add spacing: wrap text words in \text{} and add spacing around operators
+                    // First normalize spaces around = < >
+                    processed = processed.replace(/\s*=\s*/g, ' = ');
+                    processed = processed.replace(/\s*<\s*/g, ' < ');
+                    processed = processed.replace(/\s*>\s*/g, ' > ');
+                    // Wrap common text words
+                    processed = processed.replace(/\b(if|and|or|for|where|when|otherwise|divides)\b/g, '\\text{$1}');
+                    // Convert spaces to LaTeX spaces
+                    processed = processed.replace(/ /g, '\\ ');
+                    return processed;
+                }).join(' \\\\ ');
+                result += addPlaceholder(`\\begin{cases}${processedCases}\\end{cases}`);
+                lastIndex = j;
+                casesPattern.lastIndex = j;
+            } else {
+                result += match[0];
+                lastIndex = match.index + match[0].length;
+            }
+        }
+
+        result += line.substring(lastIndex);
+        return result;
+    };
+    processedLine = handleCasesEnvironment(processedLine);
 
     // Absolute value: |...| -> \left|...\right|
     // Handle nested absolute values by processing from innermost outward

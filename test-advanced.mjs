@@ -29,6 +29,8 @@ const greekLetters = {
   'omega': '\\omega', 'pi': '\\pi', 'mu': '\\mu', 'phi': '\\phi', 'rho': '\\rho',
   'tau': '\\tau', 'zeta': '\\zeta', 'eta': '\\eta', 'chi': '\\chi', 'psi': '\\psi',
   'nu': '\\nu', 'kappa': '\\kappa', 'xi': '\\xi',
+  // PDE additions
+  'partial': '\\partial', 'eps': '\\varepsilon',
 };
 
 const processContent = (content) => {
@@ -262,6 +264,148 @@ function compile(input) {
     let processedInner = processFractionsInContent(content);
     return addPlaceholder(`\\lceil ${processContent(processedInner)} \\rceil`);
   });
+
+  // Process hat: hat(x) -> \hat{x}
+  processedLine = handleFunctionCall(processedLine, 'hat', (content) => {
+    return addPlaceholder(`\\hat{${processContent(content.trim())}}`);
+  });
+
+  // Process bar: bar(x) -> \bar{x}
+  processedLine = handleFunctionCall(processedLine, 'bar', (content) => {
+    return addPlaceholder(`\\bar{${processContent(content.trim())}}`);
+  });
+
+  // Process tilde: tilde(x) -> \tilde{x}
+  processedLine = handleFunctionCall(processedLine, 'tilde', (content) => {
+    return addPlaceholder(`\\tilde{${processContent(content.trim())}}`);
+  });
+
+  // Process matrix: matrix([[a,b],[c,d]]) -> \begin{pmatrix}a & b \\ c & d\end{pmatrix}
+  const parseMatrixContent = (content) => {
+    const trimmed = content.trim();
+    if (!trimmed.startsWith('[') || !trimmed.endsWith(']')) {
+      return [[content]];
+    }
+    const inner = trimmed.slice(1, -1).trim();
+    const rows = [];
+    let depth = 0;
+    let currentRow = '';
+    let i = 0;
+    while (i < inner.length) {
+      const ch = inner[i];
+      if (ch === '[') {
+        if (depth === 0) currentRow = '';
+        depth++;
+        if (depth > 1) currentRow += ch;
+      } else if (ch === ']') {
+        depth--;
+        if (depth === 0) {
+          const cells = currentRow.split(',').map(c => c.trim());
+          rows.push(cells);
+        } else {
+          currentRow += ch;
+        }
+      } else if (ch === ',' && depth === 0) {
+        // Skip comma between rows
+      } else {
+        if (depth > 0) currentRow += ch;
+      }
+      i++;
+    }
+    return rows;
+  };
+
+  const handleMatrixEnv = (line, fnName, envName) => {
+    const pattern = new RegExp(`\\b${fnName}\\s*\\(`, 'g');
+    let result = '';
+    let lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(line)) !== null) {
+      result += line.substring(lastIndex, match.index);
+      const openParen = match.index + match[0].length - 1;
+      const closeParen = findClosingParen(line, openParen);
+      if (closeParen !== -1) {
+        const content = line.substring(openParen + 1, closeParen);
+        const rows = parseMatrixContent(content);
+        const latexRows = rows.map(row =>
+          row.map(cell => {
+            let processed = cell;
+            // Apply Greek letters BEFORE subscript processing
+            // Use lookahead to also match before _ (subscript)
+            Object.entries(greekLetters).forEach(([name, latex]) => {
+              processed = processed.replace(new RegExp(`(?<!\\\\)\\b${name}(?=[_\\^\\s=<>+\\-*/\\)\\],;]|$)`, 'g'), latex);
+            });
+            // Apply partial/eps and other symbols
+            processed = processed.replace(/\bpartial(?=[_\^\s=<>+\-*/\)\],;]|$)/g, '\\partial');
+            processed = processed.replace(/\beps(?=[_\^\s=<>+\-*/\)\],;]|$)/g, '\\varepsilon');
+            processed = processed.replace(/\binf(?=[_\^\s=<>+\-*/\)\],;]|$)/g, '\\infty');
+            // Now apply subscripts/superscripts
+            processed = processContent(processed);
+            return processed;
+          }).join(' & ')
+        ).join(' \\\\ ');
+        result += addPlaceholder(`\\begin{${envName}}${latexRows}\\end{${envName}}`);
+        lastIndex = closeParen + 1;
+        pattern.lastIndex = closeParen + 1;
+      } else {
+        result += match[0];
+        lastIndex = match.index + match[0].length;
+      }
+    }
+    result += line.substring(lastIndex);
+    return result;
+  };
+
+  processedLine = handleMatrixEnv(processedLine, 'matrix', 'pmatrix');
+  processedLine = handleMatrixEnv(processedLine, 'bmatrix', 'bmatrix');
+  processedLine = handleMatrixEnv(processedLine, 'vmatrix', 'vmatrix');
+
+  // Process cases: cases { eq1; eq2 } -> \begin{cases}eq1 \\ eq2\end{cases}
+  const handleCasesEnv = (line) => {
+    const casesPattern = /\bcases\s*\{/g;
+    let result = '';
+    let lastIndex = 0;
+    let match;
+    while ((match = casesPattern.exec(line)) !== null) {
+      result += line.substring(lastIndex, match.index);
+      const startBrace = match.index + match[0].length - 1;
+      let depth = 1;
+      let j = startBrace + 1;
+      while (j < line.length && depth > 0) {
+        if (line[j] === '{') depth++;
+        else if (line[j] === '}') depth--;
+        j++;
+      }
+      if (depth === 0) {
+        const content = line.substring(startBrace + 1, j - 1);
+        const casesList = content.split(';').map(c => c.trim()).filter(c => c);
+        const processedCases = casesList.map(c => {
+          let processed = c;
+          // Apply Greek letters BEFORE subscript processing
+          // Use lookahead to also match before _ (subscript)
+          Object.entries(greekLetters).forEach(([name, latex]) => {
+            processed = processed.replace(new RegExp(`(?<!\\\\)\\b${name}(?=[_\\^\\s=<>+\\-*/\\)\\],;]|$)`, 'g'), latex);
+          });
+          // Apply partial/eps and other symbols
+          processed = processed.replace(/\bpartial(?=[_\^\s=<>+\-*/\)\],;]|$)/g, '\\partial');
+          processed = processed.replace(/\beps(?=[_\^\s=<>+\-*/\)\],;]|$)/g, '\\varepsilon');
+          processed = processed.replace(/\binf(?=[_\^\s=<>+\-*/\)\],;]|$)/g, '\\infty');
+          // Now apply subscripts/superscripts
+          processed = processContent(processed);
+          return processed;
+        }).join(' \\\\ ');
+        result += addPlaceholder(`\\begin{cases}${processedCases}\\end{cases}`);
+        lastIndex = j;
+        casesPattern.lastIndex = j;
+      } else {
+        result += match[0];
+        lastIndex = match.index + match[0].length;
+      }
+    }
+    result += line.substring(lastIndex);
+    return result;
+  };
+  processedLine = handleCasesEnv(processedLine);
 
   // Process trig functions with fraction handling
   const mathFunctions = ['sin', 'cos', 'tan', 'sec', 'csc', 'cot', 'arcsin', 'arccos', 'arctan', 'log', 'ln', 'exp'];
@@ -543,6 +687,42 @@ const testCases = [
   { id: 105, input: 'choose(n, k) = factorial(n)/(factorial(k)*factorial(n-k))', contains: '\\binom', category: 'Complex' },
   { id: 106, input: 'sin(x)^2 + cos(x)^2 = 1', contains: '\\sin', category: 'Complex' },
   { id: 107, input: '((a+b)/(c+d))^(1/n)^(x_i)', contains: '^{x_{i}}', category: 'Complex' },
+
+  // === PDE FEATURES (108-125) ===
+  // Partial derivative symbol
+  { id: 108, input: 'partial', expected: '\\partial', category: 'PDE' },
+  { id: 109, input: 'partial u/partial x', contains: '\\partial', category: 'PDE' },
+  { id: 110, input: 'partial^2/partial(x)^2', contains: '\\partial', category: 'PDE' },
+
+  // Epsilon shorthand
+  { id: 111, input: 'eps', expected: '\\varepsilon', category: 'PDE' },
+  { id: 112, input: 'eps > 0', contains: '\\varepsilon', category: 'PDE' },
+
+  // Hat/Bar/Tilde accents
+  { id: 113, input: 'hat(u)', contains: '\\hat{u}', category: 'Accents' },
+  { id: 114, input: 'bar(x)', contains: '\\bar{x}', category: 'Accents' },
+  { id: 115, input: 'tilde(f)', contains: '\\tilde{f}', category: 'Accents' },
+  { id: 116, input: 'hat(u) + bar(v)', contains: '\\hat{u}', category: 'Accents' },
+
+  // Cases environment
+  { id: 117, input: 'cases { x = 0; y = 1 }', contains: '\\begin{cases}', category: 'Cases' },
+  { id: 118, input: 'cases { x = 0; y = 1 }', contains: '\\end{cases}', category: 'Cases' },
+  { id: 119, input: 'cases { a_1 = 0; a_2 = 1 }', contains: '\\\\', category: 'Cases' },
+
+  // Matrix environments
+  { id: 120, input: 'matrix([[a, b], [c, d]])', contains: '\\begin{pmatrix}', category: 'Matrix' },
+  { id: 121, input: 'matrix([[a, b], [c, d]])', contains: 'a & b', category: 'Matrix' },
+  { id: 122, input: 'matrix([[a, b], [c, d]])', contains: '\\\\', category: 'Matrix' },
+  { id: 123, input: 'bmatrix([[1, 0], [0, 1]])', contains: '\\begin{bmatrix}', category: 'Matrix' },
+  { id: 124, input: 'vmatrix([[a, b], [c, d]])', contains: '\\begin{vmatrix}', category: 'Matrix' },
+  { id: 125, input: 'matrix([[1]])', contains: '\\begin{pmatrix}1\\end{pmatrix}', category: 'Matrix' },
+
+  // === SYMBOL PROCESSING INSIDE ENVIRONMENTS (126-130) ===
+  { id: 126, input: 'cases { alpha = 0; beta = 1 }', contains: '\\alpha', category: 'EnvSymbols' },
+  { id: 127, input: 'cases { partial u = 0; eps > 0 }', contains: '\\partial', category: 'EnvSymbols' },
+  { id: 128, input: 'matrix([[alpha, beta], [gamma, delta]])', contains: '\\alpha', category: 'EnvSymbols' },
+  { id: 129, input: 'matrix([[partial, eps], [inf, pi]])', contains: '\\partial', category: 'EnvSymbols' },
+  { id: 130, input: 'cases { lambda_n = 0; eps_n > 0 }', contains: '\\lambda_{n}', category: 'EnvSymbols' },
 ];
 
 // ============================================
@@ -552,7 +732,7 @@ const testCases = [
 function runTests() {
   console.log('╔══════════════════════════════════════════════════════════════╗');
   console.log('║       MathScript Compiler - Advanced Test Suite              ║');
-  console.log('║                    107 Test Cases                            ║');
+  console.log('║                    130 Test Cases                            ║');
   console.log('╚══════════════════════════════════════════════════════════════╝\n');
 
   let passed = 0;
