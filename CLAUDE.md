@@ -8,7 +8,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm install          # Install dependencies
 npm run dev          # Start development server (http://localhost:3000)
 npm run build        # Build for production
-node test-advanced.mjs  # Run 107 compiler test cases
+npm run preview      # Preview production build locally
+node test-advanced.mjs  # Run 145 compiler test cases
+node test-editor.mjs    # Run 34 editor tests (autocomplete, highlighting)
 ```
 
 ## Deployment
@@ -32,7 +34,7 @@ MathBrain IDE is a React-based mathematical notation editor that compiles a cust
 
 ### Key Files
 
-- **`services/compiler.ts`** - The MathScript-to-LaTeX compiler. Uses a placeholder system (`__PH0__`, `__PH1__`, etc.) to protect complex LaTeX constructs (integrals, fractions, sqrt) from tokenization, then restores them after text/math segmentation.
+- **`services/compiler.ts`** - The MathScript-to-LaTeX compiler (~1600 lines). Uses a placeholder system (`__PH0__`, `__PH1__`, etc.) to protect complex LaTeX constructs (integrals, fractions, sqrt, matrices, cases) from tokenization, then restores them after text/math segmentation. Key processing order: Math.* replacements → function calls (sum, integral, lim, sqrt, floor, ceil, trig) → fractions → subscripts/superscripts → placeholder restoration → Greek letters.
 
 - **`constants.ts`** - Contains `INITIAL_CONTENT` (example document), `THEME` colors, and `AUTOCOMPLETE_DATA` for editor suggestions. Autocomplete templates use `$0` to mark cursor position.
 
@@ -40,17 +42,20 @@ MathBrain IDE is a React-based mathematical notation editor that compiles a cust
 
 ### MathScript Syntax
 
-
-
 The compiler recognizes:
-- **Scopes**: `Problem`, `Theorem`, `Proof`, `Case`, `Lemma` with `{ }` blocks
-- **Functions**: `sqrt(x)`, `integral(a -> b)`, `sum(i=1 -> n)`, `lim_(x -> 0)`, `choose(n, k)`, `factorial(n)`
+- **Scopes**: `Problem`, `Theorem`, `Proof`, `Case`, `Lemma`, `Section`, `Part`, `Subproblem` with `{ }` blocks
+- **Subtasks**: `- title {`, `-- nested {`, `--- deeper {` for nested proof structure (like markdown lists)
+- **Show/Goal**: `?: statement {` for stating what needs to be proven (renders as "To show:")
+- **Functions**: `sqrt(x)`, `integral(a -> b)`, `sum(i=1 -> n)`, `lim_(x -> 0)`, `choose(n, k)`, `factorial(n)`, `floor(x)`, `ceil(x)`
 - **Fractions**: `a/b` or `(a+b)/(c+d)`
-- **Subscripts/Superscripts**: `a_i`, `x^2`
+- **Subscripts/Superscripts**: `a_i`, `x^2`, `x^(1/n)`
 - **Logic**: `AND`, `OR`, `NOT`, `exists`, `forall`, `suchthat`
 - **Operators**: `+-` (±), `-+` (∓), `=>`, `<=>`, `!=`, `<=`, `>=`
-- **Greek**: `alpha`, `beta`, `delta`, etc.
+- **Greek**: `alpha`, `beta`, `delta`, `partial`, `eps`, etc.
 - **Sets**: `in`, `notin`, `subset`, `union`, `intersect`
+- **PDE/Matrices**: `cases { eq1; eq2 }`, `matrix([[a,b],[c,d]])`, `bmatrix(...)`, `vmatrix(...)`
+- **Accents**: `hat(x)`, `bar(x)`, `tilde(x)`, `vec(x)`
+- **Geometry**: `angle`, `triangle`, `perp`, `parallel`, `congruent`, `overline(AB)`, `ray(AB)`
 
 ### Compiler Internals
 
@@ -59,5 +64,10 @@ The compiler uses smart text/math segmentation:
 - Multi-character words → text (wrapped in `\text{}`)
 - Keywords in `mathKeywords` set → always math
 - Stop words in `textStopWords` set → always text
+- Context-aware detection for `and`/`or`/`not` (prose vs logic based on surrounding tokens)
 
-Placeholders prevent nested constructs from being mangled by the tokenizer.
+Placeholders prevent nested constructs from being mangled by the tokenizer. The `addPlaceholder()` function stores complex LaTeX and returns a token like `__PH0__` that survives tokenization, then gets restored at the end.
+
+### Testing
+
+Run `node test-advanced.mjs` to execute the compiler test suite. Tests cover fractions, exponents, trig functions, factorial, summation, integrals, limits, binomials, sqrt, Greek letters, subscripts, operators, floor/ceil, PDE features, cases, and matrices. Add new test cases to the `testCases` array in that file.

@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { MenuItem } from './MenuItem';
 import { MenuItemDef } from '../../types';
 import { DARK_THEME, LIGHT_THEME } from '../../constants';
+import { useDelayedUnmount } from '../../hooks/useDelayedUnmount';
 
 interface DropdownMenuProps {
   items: MenuItemDef[];
@@ -47,7 +48,13 @@ export const DropdownMenu: React.FC<DropdownMenuProps> = ({
     };
   }, [isOpen, onClose]);
 
-  if (!isOpen) return null;
+  const { shouldRender, isAnimatingOut } = useDelayedUnmount(isOpen, 120);
+
+  if (!shouldRender) return null;
+
+  const dropdownAnimation = isAnimatingOut
+    ? 'dropdownOut 120ms cubic-bezier(0.4, 0, 0.2, 1) forwards'
+    : 'dropdownIn 120ms cubic-bezier(0.4, 0, 0.2, 1)';
 
   return (
     <div
@@ -56,6 +63,7 @@ export const DropdownMenu: React.FC<DropdownMenuProps> = ({
       style={{
         backgroundColor: colors.popup,
         border: `1px solid ${colors.popupBorder}`,
+        animation: dropdownAnimation,
       }}
     >
       {items.map((item, index) => (

@@ -3,6 +3,7 @@ import { DropdownMenu } from './DropdownMenu';
 import { MenuItemDef, FileNode } from '../../types';
 import { DARK_THEME, LIGHT_THEME } from '../../constants';
 import { ChevronRight } from 'lucide-react';
+import { useDelayedUnmount } from '../../hooks/useDelayedUnmount';
 
 type MenuType = 'file' | 'edit' | 'view' | null;
 
@@ -136,6 +137,20 @@ export const MenuBar: React.FC<MenuBarProps> = ({
     color: colors.text,
   };
 
+  // Animation for File menu dropdown
+  const { shouldRender: shouldRenderFileMenu, isAnimatingOut: isFileMenuAnimatingOut } =
+    useDelayedUnmount(activeMenu === 'file', 120);
+  const fileMenuAnimation = isFileMenuAnimatingOut
+    ? 'dropdownOut 120ms cubic-bezier(0.4, 0, 0.2, 1) forwards'
+    : 'dropdownIn 120ms cubic-bezier(0.4, 0, 0.2, 1)';
+
+  // Animation for Recent submenu
+  const { shouldRender: shouldRenderRecent, isAnimatingOut: isRecentAnimatingOut } =
+    useDelayedUnmount(showRecentSubmenu, 120);
+  const recentMenuAnimation = isRecentAnimatingOut
+    ? 'dropdownOut 120ms cubic-bezier(0.4, 0, 0.2, 1) forwards'
+    : 'dropdownIn 120ms cubic-bezier(0.4, 0, 0.2, 1)';
+
   return (
     <div className="flex items-center gap-1">
       {/* File Menu */}
@@ -156,12 +171,13 @@ export const MenuBar: React.FC<MenuBarProps> = ({
         >
           File
         </button>
-        {activeMenu === 'file' && (
+        {shouldRenderFileMenu && (
           <div
             className="absolute top-full left-0 mt-1 min-w-[220px] py-1.5 rounded-md shadow-lg z-50"
             style={{
               backgroundColor: colors.popup,
               border: `1px solid ${colors.popupBorder}`,
+              animation: fileMenuAnimation,
             }}
           >
             {fileMenuItems.map((item, index) => (
@@ -218,12 +234,13 @@ export const MenuBar: React.FC<MenuBarProps> = ({
                   <span>Recent Files</span>
                   <ChevronRight size={14} style={{ color: colors.accent }} />
                 </button>
-                {showRecentSubmenu && (
+                {shouldRenderRecent && (
                   <div
                     className="absolute left-full top-0 ml-1 min-w-[180px] py-1.5 rounded-md shadow-lg z-50"
                     style={{
                       backgroundColor: colors.popup,
                       border: `1px solid ${colors.popupBorder}`,
+                      animation: recentMenuAnimation,
                     }}
                   >
                     {recentFiles.map((file) => (

@@ -30,6 +30,26 @@ export const compileMathScript = (input: string): CompilationResult => {
   // Track indentation for scopes
   let indentLevel = 0;
 
+  // Track subtask numbering per level: level 1 uses (i), (ii), level 2+ uses (a), (b)
+  const subtaskCounters: number[] = [0, 0, 0, 0, 0]; // Up to 5 nesting levels
+  const romanNumerals = ['i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x'];
+  const letters = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'];
+
+  const getSubtaskLabel = (dashCount: number): string => {
+    const idx = subtaskCounters[dashCount - 1]++;
+    if (dashCount === 1) {
+      return `(${romanNumerals[idx] || idx + 1})`;
+    } else {
+      return `(${letters[idx] || String.fromCharCode(97 + idx)})`;
+    }
+  };
+
+  const resetSubtaskCounters = (fromLevel: number) => {
+    for (let i = fromLevel; i < subtaskCounters.length; i++) {
+      subtaskCounters[i] = 0;
+    }
+  };
+
   // --- CONFIGURATION ---
 
   // 1. Math Keywords (Reserved words that are ALWAYS math/symbols)
@@ -181,6 +201,72 @@ export const compileMathScript = (input: string): CompilationResult => {
     // Regex allows trailing whitespace after {
     // Includes italic scopes: Proof, Claim, Remark, Example
     // And bold scopes: Problem, Theorem, Lemma, Definition, Corollary, Proposition
+
+    // Dash subtask pattern: -, --, ---, ---- for nested subtasks
+    // Professional style: (i), (ii) for level 1; (a), (b) for level 2+
+    const dashMatch = processedLine.match(/^(-{1,4})\s*(.*)\{\s*$/);
+    if (dashMatch) {
+        const dashCount = dashMatch[1].length;
+        const title = dashMatch[2].trim();
+        const indentStr = Array(indentLevel).fill('\\quad ').join('');
+
+        // Get numbered label like (i), (ii), (a), (b)
+        const label = getSubtaskLabel(dashCount);
+
+        // Professional rendering: label + title with colon, no bullets, no spacers
+        outputLines.push({
+            id: `line-${index}`,
+            latex: `${indentStr}\\textbf{\\text{${label} ${title}:}}`,
+            originalLine: index + 1
+        });
+        indentLevel++;
+        return;
+    }
+
+    // Show/prove pattern: ?: statement { for stating what to prove (starts a scope)
+    // Professional style: "Claim:" in italics
+    const showMatch = processedLine.match(/^\?:\s*(.*)\{\s*$/);
+    if (showMatch) {
+        const statement = showMatch[1].trim();
+        const indentStr = Array(indentLevel).fill('\\quad ').join('');
+
+        // Detect if statement contains math operators/keywords
+        // If so, compile as math; otherwise keep as plain text
+        const hasMathContent = /!=|<=|>=|->|=>|<=>|\bforall\b|\bexists\b|\bnotin\b|\bin\b/.test(statement);
+
+        let latex: string;
+        if (hasMathContent) {
+            // Compile the statement as math (apply transformations)
+            let compiledStatement = statement;
+            // Comparison operators
+            compiledStatement = compiledStatement.replace(/!=/g, '\\neq ');
+            compiledStatement = compiledStatement.replace(/<=/g, '\\leq ');
+            compiledStatement = compiledStatement.replace(/>=/g, '\\geq ');
+            // Quantifiers and set operators
+            compiledStatement = compiledStatement.replace(/\bforall\b/g, '\\forall ');
+            compiledStatement = compiledStatement.replace(/\bexists\b/g, '\\exists ');
+            compiledStatement = compiledStatement.replace(/\bin\b/g, '\\in ');
+            compiledStatement = compiledStatement.replace(/\bnotin\b/g, '\\notin ');
+            // Empty set
+            compiledStatement = compiledStatement.replace(/\{\s*\}/g, '\\emptyset ');
+            // Subscripts: A_n -> A_{n}, A_12 -> A_{12}
+            compiledStatement = compiledStatement.replace(/([a-zA-Z])_([a-zA-Z0-9]+)(?![{}])/g, '$1_{$2}');
+
+            latex = `${indentStr}\\textit{\\text{Claim: }}${compiledStatement}`;
+        } else {
+            // Keep as plain text
+            latex = `${indentStr}\\textit{\\text{Claim: ${statement}}}`;
+        }
+
+        outputLines.push({
+            id: `line-${index}`,
+            latex,
+            originalLine: index + 1
+        });
+        indentLevel++;
+        return;
+    }
+
     const scopeMatch = processedLine.match(/^(Problem|Subproblem|Section|Part|Theorem|Proof|Case|Lemma|Claim|Definition|Corollary|Proposition|Remark|Example)\s*(.*)\{\s*$/i);
     if (scopeMatch) {
         const type = scopeMatch[1];
@@ -235,9 +321,11 @@ export const compileMathScript = (input: string): CompilationResult => {
 
     if (processedLine === '}') {
         if (indentLevel > 0) indentLevel--;
+        // Reset subtask counters for deeper levels when exiting a scope
+        resetSubtaskCounters(1); // Reset all subtask counters on scope exit
         outputLines.push({
             id: `line-${index}`,
-            latex: '\\rule{0pt}{0.5em}', // Standard vertical break
+            latex: '\\rule{0pt}{0.3em}', // Smaller vertical break (professional style)
             originalLine: index + 1
         });
         return;
@@ -267,16 +355,83 @@ export const compileMathScript = (input: string): CompilationResult => {
     // Handle "not in" as two words -> \notin (before other processing)
     processedLine = processedLine.replace(/\bnot\s+in\b/g, 'notin');
 
+    // Normalize Unicode characters to ASCII equivalents
+    // Unicode vertical bars (U+2223 DIVIDES, U+2502 BOX DRAWINGS, etc.) -> |
+    processedLine = processedLine.replace(/[∣│∥]/g, '|');
+    // Unicode middle dot (U+00B7, U+2022, U+2219) -> dot (for f·g -> f dot g)
+    processedLine = processedLine.replace(/[·•∙]/g, ' dot ');
+    // Handle "Xdot Y" or "XdotY" patterns (e.g., fdotg -> f dot g, fdot g -> f dot g)
+    processedLine = processedLine.replace(/\b([a-zA-Z])dot([a-zA-Z])\b/g, '$1 dot $2');
+    processedLine = processedLine.replace(/\b([a-zA-Z])dot\s+/g, '$1 dot ');
+
+    // Handle empty set: {} -> \emptyset (when standalone, not as scope delimiter)
+    processedLine = processedLine.replace(/\{\s*\}(?=\s|$|[,;.])/g, '\\emptyset');
+
     // Handle set builder notation: {x in A : condition} -> \{x \in A \mid condition\}
     // Also handles {x : condition} without explicit membership
+
+    // Helper for parenthesized subscripts inside set content
+    const handleParenSubscriptInContent = (str: string): string => {
+        let result = '';
+        let i = 0;
+        while (i < str.length) {
+            // Look for pattern: char_(
+            if (i > 0 && str[i] === '_' && str[i + 1] === '(') {
+                const baseChar = result[result.length - 1];
+                if (/[a-zA-Z0-9\}]/.test(baseChar)) {
+                    // Find matching closing parenthesis
+                    let depth = 1;
+                    let j = i + 2;
+                    while (j < str.length && depth > 0) {
+                        if (str[j] === '(') depth++;
+                        else if (str[j] === ')') depth--;
+                        j++;
+                    }
+                    if (depth === 0) {
+                        const subscriptContent = str.substring(i + 2, j - 1);
+                        // Remove the base character and add with braces
+                        result = result.slice(0, -1);
+                        result += `${baseChar}_{${subscriptContent}}`;
+                        i = j;
+                        continue;
+                    }
+                }
+            }
+            result += str[i];
+            i++;
+        }
+        return result;
+    };
+
     const processSetContent = (content: string): string => {
         // Apply symbol replacements inside set content
         let result = content;
+        // First handle parenthesized subscripts like x_(i+1)
+        result = handleParenSubscriptInContent(result);
+        // Then apply symbol replacements
         result = result.replace(/\bnotin\b/g, '\\notin');
         result = result.replace(/\bin\b/g, '\\in');
         result = result.replace(/\bsubset\b/g, '\\subset');
         result = result.replace(/\bunion\b/g, '\\cup');
         result = result.replace(/\bintersect\b/g, '\\cap');
+        // Logic operators (inside set builder notation, these should be math symbols)
+        result = result.replace(/\band\b/g, '\\land');
+        result = result.replace(/\bor\b/g, '\\lor');
+        result = result.replace(/\bnot\b/g, '\\lnot');
+        result = result.replace(/\bAND\b/g, '\\land');
+        result = result.replace(/\bOR\b/g, '\\lor');
+        result = result.replace(/\bNOT\b/g, '\\lnot');
+        // Comparison operators
+        result = result.replace(/!=/g, '\\neq');
+        result = result.replace(/<=/g, '\\leq');
+        result = result.replace(/>=/g, '\\geq');
+        // Handle chained subscripts like R_B_i -> R_{B_{i}} (process from right to left)
+        // First pass: a_b_c -> a_b_{c}
+        while (/_([a-zA-Z0-9]+)_([a-zA-Z0-9]+)(?![{}])/.test(result)) {
+            result = result.replace(/_([a-zA-Z0-9]+)_([a-zA-Z0-9]+)(?![{}])/g, '_{$1_{$2}}');
+        }
+        // Simple subscripts: a_i -> a_{i}
+        result = result.replace(/([a-zA-Z])_([a-zA-Z0-9]+)(?![{}])/g, '$1_{$2}');
         return result;
     };
 
@@ -311,19 +466,34 @@ export const compileMathScript = (input: string): CompilationResult => {
                 }
                 if (depth === 0) {
                     const content = line.substring(i + 1, j - 1);
-                    // Check if this looks like set builder notation (contains : or |)
-                    const colonIndex = content.indexOf(':');
-                    const pipeIndex = content.indexOf('|');
-                    const separatorIndex = colonIndex !== -1 ? colonIndex : pipeIndex;
+                    // Check if this looks like set builder notation (contains : or | at top level)
+                    // Need to find : or | that's not inside nested braces
+                    let separatorIndex = -1;
+                    let braceDepth = 0;
+                    for (let k = 0; k < content.length; k++) {
+                        if (content[k] === '{') braceDepth++;
+                        else if (content[k] === '}') braceDepth--;
+                        else if (braceDepth === 0 && (content[k] === ':' || content[k] === '|')) {
+                            // Make sure | is not part of ||
+                            if (content[k] === '|' && (content[k+1] === '|' || (k > 0 && content[k-1] === '|'))) {
+                                continue;
+                            }
+                            separatorIndex = k;
+                            break;
+                        }
+                    }
 
                     if (separatorIndex !== -1) {
                         // It's set builder notation
-                        const element = processSetContent(content.substring(0, separatorIndex).trim());
-                        const condition = processSetContent(content.substring(separatorIndex + 1).trim());
-                        result += addPlaceholder(`\\{${element} \\mid ${condition}\\}`);
+                        // Recursively process inner content for nested sets
+                        const element = handleSetBuilder(content.substring(0, separatorIndex).trim());
+                        const condition = handleSetBuilder(content.substring(separatorIndex + 1).trim());
+                        result += addPlaceholder(`\\{${processSetContent(element)} \\mid ${processSetContent(condition)}\\}`);
                     } else {
                         // Regular braces - escape them for LaTeX
-                        result += addPlaceholder(`\\{${processSetContent(content)}\\}`);
+                        // Recursively process inner content for nested sets
+                        const processedInner = handleSetBuilder(content);
+                        result += addPlaceholder(`\\{${processSetContent(processedInner)}\\}`);
                     }
                     i = j;
                     continue;
@@ -351,12 +521,28 @@ export const compileMathScript = (input: string): CompilationResult => {
         // NOTE: We DON'T apply Greek letters here because that would break Math.pi
         // Greek letters and Math.* replacements happen AFTER placeholder restoration
 
+        // Unicode normalization (must happen inside nested content too)
+        result = result.replace(/[∣│∥]/g, '|');
+        result = result.replace(/[·•∙]/g, ' dot ');
+
+        // XdotY patterns (fdotg -> f dot g)
+        result = result.replace(/\b([a-zA-Z])dot([a-zA-Z])\b/g, '$1 dot $2');
+        result = result.replace(/\b([a-zA-Z])dot\s+/g, '$1 dot ');
+
+        // Empty set
+        result = result.replace(/\{\s*\}(?=\s|$|[,;.]|$)/g, '\\emptyset');
+
         // Apply subscripts/superscripts to content
         result = result.replace(/([a-zA-Z])_([a-zA-Z0-9]+)(?![{}])/g, '$1_{$2}');
         result = result.replace(/([a-zA-Z0-9])(?<![\\])\^([a-zA-Z0-9]+)(?![{}])/g, '$1^{$2}');
+
         // Apply plus-minus/minus-plus
         result = result.replace(/\+-/g, '\\pm');
         result = result.replace(/-\+/g, '\\mp');
+
+        // Convert dot keyword to \cdot (after XdotY expansion)
+        result = result.replace(/\bdot\b/g, '\\cdot');
+
         return result;
     };
 
@@ -1083,6 +1269,25 @@ export const compileMathScript = (input: string): CompilationResult => {
         return addPlaceholder(`\\frac{${numWithBackslash}}{${processContent(den)}}`);
     });
 
+    // Handle chained subscripts like R_B_i -> R_{B_{i}}
+    // Must run BEFORE simple subscript processing
+    // Match pattern: X_Y_Z where none are already braced
+    // Process iteratively from right to left
+    let chainedSubsChanged = true;
+    while (chainedSubsChanged) {
+        chainedSubsChanged = false;
+        // Match X_Y_Z pattern (letters/digits separated by underscores)
+        const chainedMatch = processedLine.match(/([a-zA-Z0-9])_([a-zA-Z0-9]+)_([a-zA-Z0-9]+)(?![{}])/);
+        if (chainedMatch && chainedMatch.index !== undefined) {
+            const before = processedLine.substring(0, chainedMatch.index);
+            const after = processedLine.substring(chainedMatch.index + chainedMatch[0].length);
+            // R_B_i becomes R_{B_{i}}
+            const replacement = `${chainedMatch[1]}_{${chainedMatch[2]}_{${chainedMatch[3]}}}`;
+            processedLine = before + replacement + after;
+            chainedSubsChanged = true;
+        }
+    }
+
     // Subscripts: a_i -> a_{i}
     processedLine = processedLine.replace(/([a-zA-Z])_([a-zA-Z0-9]+)(?![{}])/g, '$1_{$2}');
 
@@ -1263,8 +1468,8 @@ export const compileMathScript = (input: string): CompilationResult => {
         }
 
         // Keywords -> MATH
-        // Note: 'and', 'or', 'not' (lowercase) are handled separately with context detection below
-        const contextSensitiveWords = new Set(['and', 'or', 'not']);
+        // Note: 'and', 'or', 'not', 'in' (lowercase) are handled separately with context detection below
+        const contextSensitiveWords = new Set(['and', 'or', 'not', 'in']);
         if (!contextSensitiveWords.has(cleanToken.toLowerCase()) &&
             (mathKeywords.has(cleanToken) || symbolMap[cleanToken])) {
             segments.push({ type: 'MATH', content: symbolMap[cleanToken] || cleanToken });
@@ -1278,18 +1483,18 @@ export const compileMathScript = (input: string): CompilationResult => {
              continue;
         }
 
-        // 2. Handle "and", "or", "not" with context detection
+        // 2. Handle "and", "or", "not", "in" with context detection
         // These can be either English words or logical operators depending on context
         const lowerToken = cleanToken.toLowerCase();
-        if (lowerToken === 'and' || lowerToken === 'or' || lowerToken === 'not') {
+        if (lowerToken === 'and' || lowerToken === 'or' || lowerToken === 'not' || lowerToken === 'in') {
             // Helper to get the nearest non-space, non-punctuation word in a direction
             const getNearbyWord = (direction: 'before' | 'after'): string | null => {
                 let j = direction === 'before' ? i - 1 : i + 1;
                 const step = direction === 'before' ? -1 : 1;
                 while (j >= 0 && j < rawTokens.length) {
                     const t = rawTokens[j].trim();
-                    // Skip spaces and punctuation
-                    if (t && !/^\s+$/.test(rawTokens[j]) && !/^[,.:;!?()\[\]]+$/.test(t)) {
+                    // Skip spaces, punctuation, braces, and vertical bars
+                    if (t && !/^\s+$/.test(rawTokens[j]) && !/^[,.:;!?()\[\]{}|]+$/.test(t)) {
                         return t.toLowerCase();
                     }
                     j += step;
@@ -1373,6 +1578,35 @@ export const compileMathScript = (input: string): CompilationResult => {
                     'the', 'a', 'an', 'be', 'have'];
                 if (wordAfter && (notFollowedByProse.includes(wordAfter) || afterIsProse)) {
                     segments.push({ type: 'TEXT', content: token });
+                    continue;
+                }
+            }
+
+            // 4b. Special patterns for "in":
+            //    - "in" preceded by prose like "with", "is", "be", "included" -> TEXT
+            //    - "in" followed by "this", "the", "order", "which" -> TEXT
+            //    - "in" followed by single uppercase letter (set membership) -> MATH
+            if (lowerToken === 'in') {
+                const inPrecededByProse = ['with', 'is', 'are', 'be', 'been', 'being', 'included',
+                    'contained', 'found', 'located', 'placed', 'put', 'given', 'shown', 'written',
+                    'interested', 'involved', 'resulting', 'living', 'defined', 'stated'];
+                const inFollowedByProse = ['this', 'the', 'a', 'an', 'order', 'which', 'that',
+                    'other', 'some', 'any', 'each', 'every', 'particular', 'general', 'fact',
+                    'addition', 'contrast', 'practice', 'theory', 'case', 'cases', 'terms'];
+
+                // If preceded by prose -> TEXT
+                if (wordBefore && inPrecededByProse.includes(wordBefore)) {
+                    segments.push({ type: 'TEXT', content: token });
+                    continue;
+                }
+                // If followed by prose phrase starters -> TEXT
+                if (wordAfter && inFollowedByProse.includes(wordAfter)) {
+                    segments.push({ type: 'TEXT', content: token });
+                    continue;
+                }
+                // If followed by a single uppercase letter (like "x in A") -> MATH
+                if (wordAfter && wordAfter.length === 1 && /^[A-Z]$/.test(wordAfter.toUpperCase())) {
+                    segments.push({ type: 'MATH', content: symbolMap[lowerToken] || token });
                     continue;
                 }
             }

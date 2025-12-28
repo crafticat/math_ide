@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { X, ChevronDown, ChevronRight } from 'lucide-react';
 import { generateSyntaxReference } from '../../services/syntaxReference';
+import { useDelayedUnmount } from '../../hooks/useDelayedUnmount';
 
 interface SyntaxHelpDialogProps {
   isOpen: boolean;
@@ -57,7 +58,16 @@ export const SyntaxHelpDialog: React.FC<SyntaxHelpDialogProps> = ({
     return () => document.removeEventListener('keydown', handleEscape);
   }, [isOpen, onClose]);
 
-  if (!isOpen) return null;
+  const { shouldRender, isAnimatingOut } = useDelayedUnmount(isOpen, 200);
+
+  if (!shouldRender) return null;
+
+  const backdropAnimation = isAnimatingOut
+    ? 'fadeOut 150ms ease forwards'
+    : 'fadeIn 150ms ease';
+  const dialogAnimation = isAnimatingOut
+    ? 'scaleOut 200ms cubic-bezier(0.4, 0, 0.2, 1) forwards'
+    : 'scaleIn 200ms cubic-bezier(0.4, 0, 0.2, 1)';
 
   const toggleCategory = (title: string) => {
     setExpandedCategories(prev => {
@@ -76,6 +86,7 @@ export const SyntaxHelpDialog: React.FC<SyntaxHelpDialogProps> = ({
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/50"
+        style={{ animation: backdropAnimation }}
         onClick={onClose}
       />
 
@@ -85,6 +96,7 @@ export const SyntaxHelpDialog: React.FC<SyntaxHelpDialogProps> = ({
           relative w-[750px] max-h-[80vh] rounded-lg shadow-xl flex flex-col
           ${isDark ? 'bg-[#1e1e1e] text-gray-200' : 'bg-white text-gray-800'}
         `}
+        style={{ animation: dialogAnimation }}
       >
         {/* Header */}
         <div className={`

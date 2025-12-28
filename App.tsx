@@ -18,6 +18,7 @@ import {
   addFile, removeFile, getAllFiles, generateUniqueFileName
 } from './services/storage';
 import { Play, FileDown, Code, Eye, X, Circle, HelpCircle } from 'lucide-react';
+import { useDelayedUnmount } from './hooks/useDelayedUnmount';
 
 export default function App() {
   // File state
@@ -47,6 +48,25 @@ export default function App() {
 
   // Theme colors
   const themeColors = theme === 'dark' ? DARK_THEME : LIGHT_THEME;
+
+  // Panel animations
+  const { shouldRender: showSidebar, isAnimatingOut: sidebarClosing } =
+    useDelayedUnmount(sidebarVisible, 200);
+  const sidebarAnimation = sidebarClosing
+    ? 'slideOutLeft 200ms cubic-bezier(0.4, 0, 0.2, 1) forwards'
+    : 'slideInLeft 200ms cubic-bezier(0.4, 0, 0.2, 1)';
+
+  const { shouldRender: showPreview, isAnimatingOut: previewClosing } =
+    useDelayedUnmount(previewVisible, 200);
+  const previewAnimation = previewClosing
+    ? 'slideOutRight 200ms cubic-bezier(0.4, 0, 0.2, 1) forwards'
+    : 'slideInRight 200ms cubic-bezier(0.4, 0, 0.2, 1)';
+
+  const { shouldRender: showConsole, isAnimatingOut: consoleClosing } =
+    useDelayedUnmount(consoleVisible, 200);
+  const consoleAnimation = consoleClosing
+    ? 'slideOutDown 200ms cubic-bezier(0.4, 0, 0.2, 1) forwards'
+    : 'slideInUp 200ms cubic-bezier(0.4, 0, 0.2, 1)';
 
   // Load initial content from active file
   useEffect(() => {
@@ -617,8 +637,8 @@ export default function App() {
 
       {/* Main Workspace */}
       <div className="flex flex-1 min-h-0">
-        {sidebarVisible && (
-          <>
+        {showSidebar && (
+          <div style={{ display: 'flex', animation: sidebarAnimation }}>
             <Sidebar
               files={files}
               activeFileId={activeFile}
@@ -632,7 +652,7 @@ export default function App() {
               unsavedFiles={unsavedChanges ? [activeFile] : []}
               theme={theme}
             />
-          </>
+          </div>
         )}
 
         {/* Editor & Preview Area */}
@@ -669,7 +689,7 @@ export default function App() {
                 style={{ backgroundColor: themeColors.accent }}
               />
             </div>
-            {previewVisible && (
+            {showPreview && (
               <div
                 className="flex items-center gap-2 px-3 py-2 text-xs cursor-pointer transition-colors"
                 style={{
@@ -688,7 +708,7 @@ export default function App() {
           {/* Split View Container */}
           <div className="flex-1 flex min-h-0 relative">
             {/* Editor Pane */}
-            <div className={`flex flex-col h-full ${previewVisible ? 'flex-1' : 'w-full'}`}>
+            <div className={`flex flex-col h-full ${showPreview ? 'flex-1' : 'w-full'}`}>
               <Editor
                 content={content}
                 onChange={handleContentChange}
@@ -699,13 +719,13 @@ export default function App() {
               />
             </div>
 
-            {previewVisible && (
-              <>
+            {showPreview && (
+              <div style={{ display: 'flex', width: '45%', animation: previewAnimation }}>
                 {/* Divider */}
                 <div className="w-[1px] flex-shrink-0" style={{ backgroundColor: themeColors.border }} />
 
                 {/* Preview Pane */}
-                <div className="w-[45%] flex flex-col h-full" style={{ backgroundColor: themeColors.bg }}>
+                <div className="flex-1 flex flex-col h-full" style={{ backgroundColor: themeColors.bg }}>
                   {/* Preview Header */}
                   <div
                     className="flex-none h-8 flex items-center justify-between px-3"
@@ -741,7 +761,7 @@ export default function App() {
                   </div>
                   <Preview latexLines={compilationResult.latexLines} theme={theme} highlightLine={cursorLine} />
                 </div>
-              </>
+              </div>
             )}
 
             {/* Find/Replace Dialog */}
@@ -759,8 +779,8 @@ export default function App() {
           </div>
 
           {/* Bottom Panel */}
-          {consoleVisible && (
-            <div className="flex-none">
+          {showConsole && (
+            <div className="flex-none" style={{ animation: consoleAnimation }}>
               <Console logs={compilationResult.logs} theme={theme} />
             </div>
           )}

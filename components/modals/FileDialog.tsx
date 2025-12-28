@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
+import { useDelayedUnmount } from '../../hooks/useDelayedUnmount';
 
 interface FileDialogProps {
   type: 'new' | 'saveAs' | 'delete';
@@ -44,7 +45,16 @@ export const FileDialog: React.FC<FileDialogProps> = ({
     return () => document.removeEventListener('keydown', handleEscape);
   }, [isOpen, onClose]);
 
-  if (!isOpen) return null;
+  const { shouldRender, isAnimatingOut } = useDelayedUnmount(isOpen, 200);
+
+  if (!shouldRender) return null;
+
+  const backdropAnimation = isAnimatingOut
+    ? 'fadeOut 150ms ease forwards'
+    : 'fadeIn 150ms ease';
+  const dialogAnimation = isAnimatingOut
+    ? 'scaleOut 200ms cubic-bezier(0.4, 0, 0.2, 1) forwards'
+    : 'scaleIn 200ms cubic-bezier(0.4, 0, 0.2, 1)';
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -93,6 +103,7 @@ export const FileDialog: React.FC<FileDialogProps> = ({
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/50"
+        style={{ animation: backdropAnimation }}
         onClick={onClose}
       />
 
@@ -102,6 +113,7 @@ export const FileDialog: React.FC<FileDialogProps> = ({
           relative w-[400px] rounded-lg shadow-xl
           ${isDark ? 'bg-[#252526] text-gray-200' : 'bg-white text-gray-800'}
         `}
+        style={{ animation: dialogAnimation }}
       >
         {/* Header */}
         <div className={`

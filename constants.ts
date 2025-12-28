@@ -143,6 +143,7 @@ export const DARK_THEME = {
     string: '#c9a227',        // Gold
     operator: '#d4a373',      // Warm amber
     bracket: '#c9a227',       // Gold brackets
+    variable: '#c4b8d4',      // Light lavender (single-letter vars like x, y, A, B)
   },
 
   // Status colors
@@ -197,6 +198,7 @@ export const LIGHT_THEME = {
     string: '#8b6914',        // Gold
     operator: '#8b5a2b',      // Brown amber
     bracket: '#8b6914',       // Gold brackets
+    variable: '#6a5080',      // Purple (single-letter vars like x, y, A, B)
   },
 
   // Status colors
@@ -241,6 +243,11 @@ export const AUTOCOMPLETE_DATA = [
     { label: 'Claim', type: 'keyword', insert: 'Claim {\n  $0\n}', cursorOffset: -2 },
     { label: 'Remark', type: 'keyword', insert: 'Remark {\n  $0\n}', cursorOffset: -2 },
     { label: 'Example', type: 'keyword', insert: 'Example {\n  $0\n}', cursorOffset: -2 },
+    // Subtasks (dash-based, like markdown lists)
+    { label: '- subtask', type: 'keyword', insert: '- $0 {\n  \n}', cursorOffset: -5 },
+    { label: '-- nested', type: 'keyword', insert: '-- $0 {\n  \n}', cursorOffset: -5 },
+    { label: '--- deeper', type: 'keyword', insert: '--- $0 {\n  \n}', cursorOffset: -5 },
+    { label: '?: show', type: 'keyword', insert: '?: $0 {\n  \n}', cursorOffset: -5 },
     { label: 'Let', type: 'keyword', insert: 'Let $0' },
 
     // Logic Symbols

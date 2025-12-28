@@ -35,12 +35,28 @@ const greekLetters = {
 
 const processContent = (content) => {
   let result = content;
+
+  // Unicode normalization (must happen inside nested content too)
+  result = result.replace(/[∣│∥]/g, '|');
+  result = result.replace(/[·•∙]/g, ' dot ');
+
+  // XdotY patterns (fdotg -> f dot g)
+  result = result.replace(/\b([a-zA-Z])dot([a-zA-Z])\b/g, '$1 dot $2');
+  result = result.replace(/\b([a-zA-Z])dot\s+/g, '$1 dot ');
+
+  // Empty set
+  result = result.replace(/\{\s*\}(?=\s|$|[,;.]|$)/g, '\\emptyset');
+
   // Apply subscripts
   result = result.replace(/([a-zA-Z])_([a-zA-Z0-9]+)(?![{}])/g, '$1_{$2}');
   // Apply simple exponents
   result = result.replace(/([a-zA-Z0-9])(?<![\\])\^([a-zA-Z0-9]+)(?![{}])/g, '$1^{$2}');
   result = result.replace(/\+-/g, '\\pm');
   result = result.replace(/-\+/g, '\\mp');
+
+  // Convert dot keyword to \cdot (after XdotY expansion)
+  result = result.replace(/\bdot\b/g, '\\cdot');
+
   return result;
 };
 
@@ -228,14 +244,155 @@ const handleParenthesizedExponent = (line) => {
   return current;
 };
 
+// Helper for parenthesized subscripts inside set content
+const handleParenSubscriptInContent = (str) => {
+  let result = '';
+  let i = 0;
+  while (i < str.length) {
+    if (i > 0 && str[i] === '_' && str[i + 1] === '(') {
+      const baseChar = result[result.length - 1];
+      if (/[a-zA-Z0-9\}]/.test(baseChar)) {
+        let depth = 1;
+        let j = i + 2;
+        while (j < str.length && depth > 0) {
+          if (str[j] === '(') depth++;
+          else if (str[j] === ')') depth--;
+          j++;
+        }
+        if (depth === 0) {
+          const subscriptContent = str.substring(i + 2, j - 1);
+          result = result.slice(0, -1);
+          result += `${baseChar}_{${subscriptContent}}`;
+          i = j;
+          continue;
+        }
+      }
+    }
+    result += str[i];
+    i++;
+  }
+  return result;
+};
+
+// Process set content (symbols, subscripts)
+const processSetContent = (content) => {
+  let result = content;
+  // First handle parenthesized subscripts like x_(i+1)
+  result = handleParenSubscriptInContent(result);
+  // Handle chained subscripts inside set content
+  while (/_([a-zA-Z0-9]+)_([a-zA-Z0-9]+)(?![{}])/.test(result)) {
+    result = result.replace(/_([a-zA-Z0-9]+)_([a-zA-Z0-9]+)(?![{}])/g, '_{$1_{$2}}');
+  }
+  // Simple subscripts: a_i -> a_{i}
+  result = result.replace(/([a-zA-Z])_([a-zA-Z0-9]+)(?![{}])/g, '$1_{$2}');
+  // Symbol replacements
+  result = result.replace(/\bnotin\b/g, '\\notin');
+  result = result.replace(/\bin\b/g, '\\in');
+  result = result.replace(/\bsubset\b/g, '\\subset');
+  result = result.replace(/\bunion\b/g, '\\cup');
+  result = result.replace(/\bintersect\b/g, '\\cap');
+  // Logic operators (inside set builder notation, these should be math symbols)
+  result = result.replace(/\band\b/g, '\\land');
+  result = result.replace(/\bor\b/g, '\\lor');
+  result = result.replace(/\bnot\b/g, '\\lnot');
+  result = result.replace(/\bAND\b/g, '\\land');
+  result = result.replace(/\bOR\b/g, '\\lor');
+  result = result.replace(/\bNOT\b/g, '\\lnot');
+  // Comparison operators
+  result = result.replace(/!=/g, '\\neq');
+  result = result.replace(/<=/g, '\\leq');
+  result = result.replace(/>=/g, '\\geq');
+  return result;
+};
+
+// Handle set builder notation and nested sets
+const handleSetBuilder = (line) => {
+  let result = '';
+  let i = 0;
+  while (i < line.length) {
+    if (line[i] === '{') {
+      // Check if this is a cases environment - skip it
+      const before = line.substring(0, i);
+      if (/\bcases\s*$/.test(before)) {
+        let depth = 1;
+        let j = i + 1;
+        while (j < line.length && depth > 0) {
+          if (line[j] === '{') depth++;
+          else if (line[j] === '}') depth--;
+          j++;
+        }
+        result += line.substring(i, j);
+        i = j;
+        continue;
+      }
+      // Find matching closing brace
+      let depth = 1;
+      let j = i + 1;
+      while (j < line.length && depth > 0) {
+        if (line[j] === '{') depth++;
+        else if (line[j] === '}') depth--;
+        j++;
+      }
+      if (depth === 0) {
+        const content = line.substring(i + 1, j - 1);
+        // Find : or | at top level (not inside nested braces)
+        let separatorIndex = -1;
+        let braceDepth = 0;
+        for (let k = 0; k < content.length; k++) {
+          if (content[k] === '{') braceDepth++;
+          else if (content[k] === '}') braceDepth--;
+          else if (braceDepth === 0 && (content[k] === ':' || content[k] === '|')) {
+            if (content[k] === '|' && (content[k+1] === '|' || (k > 0 && content[k-1] === '|'))) {
+              continue;
+            }
+            separatorIndex = k;
+            break;
+          }
+        }
+
+        if (separatorIndex !== -1) {
+          // Set builder notation
+          const element = handleSetBuilder(content.substring(0, separatorIndex).trim());
+          const condition = handleSetBuilder(content.substring(separatorIndex + 1).trim());
+          result += addPlaceholder(`\\{${processSetContent(element)} \\mid ${processSetContent(condition)}\\}`);
+        } else {
+          // Regular braces - recursively process inner content
+          const processedInner = handleSetBuilder(content);
+          result += addPlaceholder(`\\{${processSetContent(processedInner)}\\}`);
+        }
+        i = j;
+        continue;
+      }
+    }
+    result += line[i];
+    i++;
+  }
+  return result;
+};
+
 function compile(input) {
   placeholders = [];
   let processedLine = input;
+
+  // Normalize Unicode characters to ASCII equivalents
+  // Unicode vertical bars (U+2223 DIVIDES, U+2502 BOX DRAWINGS, etc.) -> |
+  processedLine = processedLine.replace(/[∣│∥]/g, '|');
+  // Unicode middle dot (U+00B7, U+2022, U+2219) -> dot (for f·g -> f dot g)
+  processedLine = processedLine.replace(/[·•∙]/g, ' dot ');
+  // Handle "Xdot Y" or "XdotY" patterns (e.g., fdotg -> f dot g, fdot g -> f dot g)
+  processedLine = processedLine.replace(/\b([a-zA-Z])dot([a-zA-Z])\b/g, '$1 dot $2');
+  processedLine = processedLine.replace(/\b([a-zA-Z])dot\s+/g, '$1 dot ');
+
+  // Handle empty set: {} -> \emptyset (when standalone, not as scope delimiter)
+  processedLine = processedLine.replace(/\{\s*\}(?=\s|$|[,;.])/g, '\\emptyset');
 
   // Apply Math.* replacements FIRST
   Object.keys(mathPackage).forEach(k => {
     processedLine = processedLine.split(k).join(mathPackage[k]);
   });
+
+  // Handle set notation early (before other processing)
+  processedLine = handleSetBuilder(processedLine);
 
   // Process factorial
   processedLine = handleFunctionCall(processedLine, 'factorial', (content) => {
@@ -445,6 +602,21 @@ function compile(input) {
     return addPlaceholder(`\\binom{${n.trim()}}{${k.trim()}}`);
   });
 
+  // Handle chained subscripts like R_B_i -> R_{B_{i}}
+  // Must run BEFORE simple subscript processing
+  let chainedSubsChanged = true;
+  while (chainedSubsChanged) {
+    chainedSubsChanged = false;
+    const chainedMatch = processedLine.match(/([a-zA-Z0-9])_([a-zA-Z0-9]+)_([a-zA-Z0-9]+)(?![{}])/);
+    if (chainedMatch && chainedMatch.index !== undefined) {
+      const before = processedLine.substring(0, chainedMatch.index);
+      const after = processedLine.substring(chainedMatch.index + chainedMatch[0].length);
+      const replacement = `${chainedMatch[1]}_{${chainedMatch[2]}_{${chainedMatch[3]}}}`;
+      processedLine = before + replacement + after;
+      chainedSubsChanged = true;
+    }
+  }
+
   // Subscripts at top level (before fraction processing): x_i -> x_{i}
   processedLine = processedLine.replace(/([a-zA-Z])_([a-zA-Z0-9]+)(?![{}])/g, '$1_{$2}');
 
@@ -536,6 +708,8 @@ function compile(input) {
   outputLatex = outputLatex.replace(/!=/g, '\\neq');
   outputLatex = outputLatex.replace(/\+-/g, '\\pm');
   outputLatex = outputLatex.replace(/-\+/g, '\\mp');
+  outputLatex = outputLatex.replace(/->/g, '\\to');  // Arrow operator
+  outputLatex = outputLatex.replace(/\bdot\b/g, '\\cdot');  // Dot product
   outputLatex = outputLatex.replace(/\binf\b/g, '\\infty');
   outputLatex = outputLatex.replace(/\bforall\b/g, '\\forall');
   outputLatex = outputLatex.replace(/\bexists\b/g, '\\exists');
@@ -544,6 +718,10 @@ function compile(input) {
   outputLatex = outputLatex.replace(/\bsubset\b/g, '\\subset');
   outputLatex = outputLatex.replace(/\bunion\b/g, '\\cup');
   outputLatex = outputLatex.replace(/\bintersect\b/g, '\\cap');
+  // Logic operators (uppercase always converted, lowercase in math context)
+  outputLatex = outputLatex.replace(/\bAND\b/g, '\\land');
+  outputLatex = outputLatex.replace(/\bOR\b/g, '\\lor');
+  outputLatex = outputLatex.replace(/\bNOT\b/g, '\\lnot');
 
   return outputLatex;
 }
@@ -723,6 +901,74 @@ const testCases = [
   { id: 128, input: 'matrix([[alpha, beta], [gamma, delta]])', contains: '\\alpha', category: 'EnvSymbols' },
   { id: 129, input: 'matrix([[partial, eps], [inf, pi]])', contains: '\\partial', category: 'EnvSymbols' },
   { id: 130, input: 'cases { lambda_n = 0; eps_n > 0 }', contains: '\\lambda_{n}', category: 'EnvSymbols' },
+
+  // === NESTED SETS AND CHAINED SUBSCRIPTS (131-140) ===
+  // Nested set braces: set of sets
+  { id: 131, input: '{{a, b}, {c, d}}', contains: '\\{a, b\\}', category: 'NestedSets' },
+  { id: 132, input: '{{a, b}, {c, d}}', contains: '\\{c, d\\}', category: 'NestedSets' },
+  { id: 133, input: '{(0,0), (1,1)}', contains: '\\{(0,0)', category: 'NestedSets' },
+  // Chained subscripts: R_B_i -> R_{B_{i}}
+  { id: 134, input: 'R_B_i', contains: '_{B_{i}}', category: 'ChainedSubs' },
+  { id: 135, input: 'a_b_c', contains: '_{b_{c}}', category: 'ChainedSubs' },
+  { id: 136, input: 'x_1_2', contains: '_{1_{2}}', category: 'ChainedSubs' },
+  // Parenthesized subscripts inside sets
+  { id: 137, input: '{x_i, x_(i+1)}', contains: 'x_{i+1}', category: 'ParenSubsInSet' },
+  { id: 138, input: '{x_(i+1) : i > 0}', contains: 'x_{i+1}', category: 'ParenSubsInSet' },
+  // Complex combined example
+  { id: 139, input: '{{x_i, x_(i+1)} : (x_i, x_(i+1)) notin R}', contains: '\\notin', category: 'ComplexSets' },
+  { id: 140, input: '{{x_i, x_(i+1)} : (x_i, x_(i+1)) notin R}', contains: 'x_{i+1}', category: 'ComplexSets' },
+
+  // === SUBTASK FEATURES (141-145) ===
+  // Note: Subtask/scope features (-, --, ?:) are tested at the full-file level
+  // These tests verify the inline content processing works within subtask contexts
+  { id: 141, input: 'forall a in A, aRa', contains: '\\forall', category: 'Subtask' },
+  { id: 142, input: 'aRb => bRa', contains: '\\implies', category: 'Subtask' },
+  { id: 143, input: '(aRb AND bRc) => aRc', contains: '\\implies', category: 'Subtask' },
+  { id: 144, input: 'f(a) = f(b)', notContains: '__PH', category: 'Subtask' },
+  { id: 145, input: 'x_i in A', contains: '\\in', category: 'Subtask' },
+
+  // === DOT AND ARROW OPERATORS (146-150) ===
+  { id: 146, input: 'f dot g', contains: '\\cdot', category: 'DotArrow' },
+  { id: 147, input: 'a dot b = c', contains: '\\cdot', category: 'DotArrow' },
+  { id: 148, input: 'x -> y', contains: '\\to', category: 'DotArrow' },
+  { id: 149, input: 'a -> b -> c', contains: '\\to', category: 'DotArrow' },
+  { id: 150, input: 'g(x) <= 2 -> f(x) <= 100', contains: '\\to', category: 'DotArrow' },
+
+  // === SET BUILDER WITH LOGIC (151-155) ===
+  { id: 151, input: '{x : x in N and x > 0}', contains: '\\land', category: 'SetBuilderLogic' },
+  { id: 152, input: '{x,y : x in N and x != y}', contains: '\\land', category: 'SetBuilderLogic' },
+  { id: 153, input: '{x,y : x in N and x != y}', contains: '\\neq', category: 'SetBuilderLogic' },
+  { id: 154, input: '{x : x > 0 or x < -1}', contains: '\\lor', category: 'SetBuilderLogic' },
+  { id: 155, input: '{x : not x in A}', contains: '\\lnot', category: 'SetBuilderLogic' },
+
+  // === UNICODE NORMALIZATION (156-160) ===
+  { id: 156, input: '∣x∣', contains: '|x|', category: 'Unicode' },  // Unicode vertical bars
+  { id: 157, input: 'f·g', contains: '\\cdot', category: 'Unicode' },  // Unicode middle dot
+  { id: 158, input: '∣Im(f)∣ = 1', contains: '|Im(f)|', category: 'Unicode' },
+  { id: 159, input: 'a·b = c', contains: '\\cdot', category: 'Unicode' },
+  { id: 160, input: 'g != f_n AND ∣x∣ = 1', contains: '\\land', category: 'Unicode' },
+
+  // === DOT PRODUCT PATTERNS (161-165) ===
+  { id: 161, input: 'fdotg', contains: '\\cdot', category: 'DotProduct' },  // Xdot Y pattern
+  { id: 162, input: 'adotb', contains: '\\cdot', category: 'DotProduct' },
+  { id: 163, input: 'Im(fdotg)', contains: '\\cdot', category: 'DotProduct' },
+  { id: 164, input: '|Im(fdotg)| = 1', contains: '\\cdot', category: 'DotProduct' },
+  { id: 165, input: 'xdoty + zdotw', contains: '\\cdot', category: 'DotProduct' },
+
+  // === EMPTY SET (166-167) ===
+  { id: 166, input: '{} AND x', contains: '\\emptyset', category: 'EmptySet' },
+  { id: 167, input: 'A = {}', contains: '\\emptyset', category: 'EmptySet' },
+
+  // === NESTED CONTENT TRANSFORMATIONS (168-175) ===
+  // These test that transformations work INSIDE function arguments and constructs
+  { id: 168, input: 'sqrt(fdotg)', contains: '\\cdot', category: 'NestedTransform' },
+  { id: 169, input: 'sqrt(adotb)', contains: '\\cdot', category: 'NestedTransform' },
+  { id: 170, input: 'floor(xdoty)', contains: '\\cdot', category: 'NestedTransform' },
+  { id: 171, input: 'ceil(pdotq)', contains: '\\cdot', category: 'NestedTransform' },
+  { id: 172, input: 'integral(0 -> 1) fdotg dx', contains: '\\cdot', category: 'NestedTransform' },
+  { id: 173, input: 'sum(i=1 -> n) adotb', contains: '\\cdot', category: 'NestedTransform' },
+  { id: 174, input: 'lim(x -> 0) fdotg', contains: '\\cdot', category: 'NestedTransform' },
+  { id: 175, input: '|Im(fdotg)| = 1 AND g != f_n', contains: '\\cdot', category: 'NestedTransform' },
 ];
 
 // ============================================
@@ -732,7 +978,7 @@ const testCases = [
 function runTests() {
   console.log('╔══════════════════════════════════════════════════════════════╗');
   console.log('║       MathScript Compiler - Advanced Test Suite              ║');
-  console.log('║                    130 Test Cases                            ║');
+  console.log('║                    175 Test Cases                            ║');
   console.log('╚══════════════════════════════════════════════════════════════╝\n');
 
   let passed = 0;

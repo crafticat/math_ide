@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { X, ChevronDown, ChevronUp } from 'lucide-react';
+import { useDelayedUnmount } from '../../hooks/useDelayedUnmount';
 
 interface FindReplaceDialogProps {
   isOpen: boolean;
@@ -111,7 +112,13 @@ export const FindReplaceDialog: React.FC<FindReplaceDialogProps> = ({
     onReplaceContent(newContent);
   }, [content, findText, replaceText, matchCase, matches, onReplaceContent]);
 
-  if (!isOpen) return null;
+  const { shouldRender, isAnimatingOut } = useDelayedUnmount(isOpen, 120);
+
+  if (!shouldRender) return null;
+
+  const dialogAnimation = isAnimatingOut
+    ? 'dropdownOut 120ms cubic-bezier(0.4, 0, 0.2, 1) forwards'
+    : 'dropdownIn 120ms cubic-bezier(0.4, 0, 0.2, 1)';
 
   return (
     <div
@@ -119,7 +126,7 @@ export const FindReplaceDialog: React.FC<FindReplaceDialogProps> = ({
         absolute top-12 right-4 z-50 rounded-lg shadow-xl
         ${isDark ? 'bg-[#252526] border border-[#454545]' : 'bg-white border border-gray-300'}
       `}
-      style={{ width: mode === 'replace' ? '340px' : '300px' }}
+      style={{ width: mode === 'replace' ? '340px' : '300px', animation: dialogAnimation }}
     >
       <div className="p-3">
         {/* Find Row */}

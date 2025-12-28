@@ -2,6 +2,7 @@
 
 import React, { useRef, useState, useEffect, RefObject } from 'react';
 import { THEME, AUTOCOMPLETE_DATA, DARK_THEME, LIGHT_THEME } from '../constants';
+import { useDelayedUnmount } from '../hooks/useDelayedUnmount';
 
 interface EditorProps {
   content: string;
@@ -30,6 +31,13 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
   // Bracket matching state
   const [matchingBracket, setMatchingBracket] = useState<{ open: number; close: number } | null>(null);
   const [cursorLine, setCursorLine] = useState(1);
+
+  // Autocomplete animation
+  const { shouldRender: showAutoComplete, isAnimatingOut: autoCompleteClosing } =
+    useDelayedUnmount(showSuggestions, 120);
+  const autoCompleteAnimation = autoCompleteClosing
+    ? 'dropdownOut 120ms cubic-bezier(0.4, 0, 0.2, 1) forwards'
+    : 'dropdownIn 120ms cubic-bezier(0.4, 0, 0.2, 1)';
 
   const handleScroll = (e: React.UIEvent<HTMLTextAreaElement>) => {
     const newScrollTop = e.currentTarget.scrollTop;
@@ -599,12 +607,27 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
         function: syntaxColors.function,     // Sage green - functions
         string: syntaxColors.string,         // Gold - strings
         bracket: syntaxColors.bracket,       // Gold - brackets
+        variable: syntaxColors.variable || '#c4b8d4', // Light lavender - single-letter vars
     };
 
     return code.split('\n').map((line) => {
         // 1. Comments
         if (line.trim().startsWith('//')) {
             return `<span style="color: ${colors.comment};">${escapeHtml(line)}</span>`;
+        }
+
+        // 1b. Dash subtasks: -, --, ---, ---- at line start
+        const dashSubtaskMatch = line.match(/^(\s*)(-{1,4})(\s+)(.*)(\{)\s*$/);
+        if (dashSubtaskMatch) {
+            const [, indent, dashes, space, title, brace] = dashSubtaskMatch;
+            return `${escapeHtml(indent)}<span style="color: ${colors.keyword};">${escapeHtml(dashes)}</span>${escapeHtml(space)}${escapeHtml(title)}<span style="color: ${colors.bracket};">${escapeHtml(brace)}</span>`;
+        }
+
+        // 1c. Show/prove pattern: ?: at line start
+        const showMatch = line.match(/^(\s*)(\?:)(\s+)(.*)(\{)\s*$/);
+        if (showMatch) {
+            const [, indent, qmark, space, statement, brace] = showMatch;
+            return `${escapeHtml(indent)}<span style="color: ${colors.keyword};">${escapeHtml(qmark)}</span>${escapeHtml(space)}${escapeHtml(statement)}<span style="color: ${colors.bracket};">${escapeHtml(brace)}</span>`;
         }
 
         // 2. Preprocessor #define
@@ -618,27 +641,76 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
 
         let processed = escapeHtml(line);
 
+        // 2b. Mark single-letter variables with placeholders BEFORE any HTML is added
+        // This ensures we capture standalone letters like x, y, A, B correctly
+        const varPlaceholders: { placeholder: string; letter: string }[] = [];
+        let varCounter = 0;
+        processed = processed.replace(/(?<![a-zA-Z])([a-zA-Z])(?![a-zA-Z])/g, (match, letter) => {
+            const placeholder = `@VAR${varCounter}@`;
+            varPlaceholders.push({ placeholder, letter });
+            varCounter++;
+            return placeholder;
+        });
+
         // 3. Math.Package
         processed = processed.replace(/(Math)(\.)([a-zA-Z0-9_]+)/g,
             `<span style="color: ${colors.mathPackage};">$1</span><span style="color: ${themeColors.textDim};">$2</span><span style="color: ${colors.function};">$3</span>`
         );
 
         // 4. Scope Keywords (Purple) - Problem, Theorem, Proof, Case, etc.
-        const scopeKeywords = ['Problem', 'Subproblem', 'Part', 'Section', 'Theorem', 'Proof', 'Case', 'Lemma', 'Let', 'Assume', 'Then', 'Therefore'];
+        const scopeKeywords = [
+            // Scope openers
+            'Problem', 'Subproblem', 'Part', 'Section', 'Theorem', 'Proof', 'Case', 'Lemma',
+            'Definition', 'Corollary', 'Proposition', 'Remark', 'Claim', 'Example',
+            // Proof keywords
+            'Let', 'Assume', 'Then', 'Therefore', 'Since', 'Consider', 'Given', 'Suppose',
+            'Hence', 'Thus', 'And', 'If', 'Show', 'Clearly', 'Note', 'Recall', 'Define'
+        ];
         scopeKeywords.forEach(kw => {
              const regex = new RegExp(`\\b${kw}\\b`, 'g');
              processed = processed.replace(regex, `<span style="color: ${colors.keyword};">${kw}</span>`);
         });
 
-        // 5. Math Functions (Yellow) - integral, sum, lim, sup, inf, sqrt
-        const mathFunctions = ['integral', 'sum', 'lim', 'sup', 'inf', 'log', 'ln', 'sin', 'cos', 'tan', 'max', 'min', 'det', 'sqrt', 'frac'];
+        // 5. Math Functions (Yellow) - comprehensive list for math coding
+        // NOTE: Avoid words that appear in HTML like 'span', 'style', 'color'
+        const mathFunctions = [
+            // Calculus
+            'integral', 'sum', 'prod', 'lim', 'diff',
+            // Basic functions
+            'sqrt', 'cbrt', 'floor', 'ceil', 'round',
+            // Trig functions
+            'sin', 'cos', 'tan', 'cot', 'sec', 'csc',
+            'arcsin', 'arccos', 'arctan', 'arccot', 'arcsec', 'arccsc',
+            'sinh', 'cosh', 'tanh', 'coth', 'sech', 'csch',
+            // Logarithms & exponentials
+            'log', 'ln', 'exp',
+            // Combinatorics
+            'factorial', 'choose', 'binom', 'perm',
+            // Statistics & bounds
+            'max', 'min', 'sup', 'inf', 'avg', 'mean', 'median',
+            // Linear algebra
+            'det', 'rank', 'dim', 'ker',
+            'matrix', 'bmatrix', 'vmatrix', 'pmatrix',
+            // Accents/decorations
+            'hat', 'tilde', 'vec', 'dot', 'ddot', 'overline', 'underline', 'widehat', 'widetilde',
+            // Geometry
+            'ray', 'angle', 'triangle',
+            // Number theory
+            'gcd', 'lcm', 'mod',
+            // Differentials
+            'dx', 'dy', 'dz', 'dt', 'du', 'dv', 'dr', 'dtheta',
+            // Other
+            'cases', 'frac', 'tfrac', 'dfrac', 'partial'
+        ];
         mathFunctions.forEach(fn => {
              const regex = new RegExp(`\\b${fn}\\b`, 'g');
              processed = processed.replace(regex, `<span style="color: ${colors.function};">${fn}</span>`);
         });
 
-        // 6. Math Symbols (Cyan) - symbols that get replaced: exists, forall, in, suchthat, etc.
-        const mathSymbols = ['exists', 'forall', 'in', 'notin', 'subset', 'union', 'intersect', 'implies', 'iff', 'suchthat', 'QED', 'AND', 'OR', 'NOT', 'and', 'or', 'not'];
+        // 6. Math Symbols (Cyan) - symbols that get replaced: exists, forall, suchthat, etc.
+        // Note: lowercase 'in', 'and', 'or', 'not' are highlighted here for visibility,
+        // but the compiler uses context detection for actual LaTeX output
+        const mathSymbols = ['exists', 'forall', 'in', 'notin', 'subset', 'union', 'intersect', 'implies', 'iff', 'suchthat', 'QED', 'AND', 'OR', 'NOT', 'and', 'or', 'not', 'if'];
         mathSymbols.forEach(sym => {
              const regex = new RegExp(`\\b${sym}\\b`, 'g');
              processed = processed.replace(regex, `<span style="color: ${colors.mathSymbol};">${sym}</span>`);
@@ -655,8 +727,8 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
              processed = processed.replace(regex, `<span style="color: ${colors.greek};">${letter}</span>`);
         });
 
-        // 8. Operators (Gold/Yellow) - ->, =>, <=>, !=, <=, >=
-        processed = processed.replace(/(-&gt;|=&gt;|&lt;=&gt;|!=|&lt;=|&gt;=)/g,
+        // 8. Operators (Gold/Yellow) - ->, =>, <=>, !=, <=, >=, +-, -+
+        processed = processed.replace(/(-&gt;|=&gt;|&lt;=&gt;|!=|&lt;=|&gt;=|\+-|-\+)/g,
             `<span style="color: ${colors.operator};">$1</span>`
         );
 
@@ -673,8 +745,14 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
             `<span style="color: ${colors.operator};">$1</span><span style="color: ${colors.mathSymbol};">$2</span>`
         );
 
-        // 11. Braces and brackets
-        processed = processed.replace(/([{}()\[\]])/g, `<span style="color: ${colors.bracket};">$1</span>`);
+        // 11. Parentheses and square brackets only (skip {} to avoid conflicts with HTML spans)
+        processed = processed.replace(/([()\[\]])/g, `<span style="color: ${colors.bracket};">$1</span>`);
+
+        // 12. Restore single-letter variable placeholders with the variable color (lavender)
+        // This provides contrast with blue math symbols
+        varPlaceholders.forEach(({ placeholder, letter }) => {
+            processed = processed.replace(placeholder, `<span style="color: ${colors.variable};">${letter}</span>`);
+        });
 
         if (processed === '') return ' ';
         return processed;
@@ -835,7 +913,7 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
          />
 
          {/* Autocomplete Popup */}
-         {showSuggestions && (
+         {showAutoComplete && (
              <div
                 className="absolute z-50 w-64 shadow-xl rounded-md flex flex-col overflow-hidden"
                 style={{
@@ -844,7 +922,8 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
                     maxHeight: '200px',
                     overflowY: 'auto',
                     backgroundColor: colors.popup,
-                    border: `1px solid ${colors.popupBorder}`
+                    border: `1px solid ${colors.popupBorder}`,
+                    animation: autoCompleteAnimation
                 }}
              >
                  {suggestions.map((item, index) => (
