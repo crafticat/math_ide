@@ -17,9 +17,9 @@ export type Expr =
   | { kind: 'Num'; value: string; span: Span }
   | { kind: 'Var'; name: string; span: Span } // single letter
   | { kind: 'Ident'; name: string; span: Span } // multi-char math identifier -> \mathrm
-  | { kind: 'Sym'; name: string; latex: string; span: Span } // greek / keyword symbols (from language tables)
+  | { kind: 'Sym'; name: string; latex: string; span: Span } // greek / keyword symbols / punctuation connectors (from language tables or identity-latex)
   | { kind: 'Text'; text: string; span: Span } // prose run
-  | { kind: 'BinOp'; op: string; left: Expr; right: Expr; span: Span } // + - * juxt (op: '+', '-', 'cdot', 'juxt', 'pm', 'mp', 'land', 'lor', 'cup', 'cap', 'mid', 'to')
+  | { kind: 'BinOp'; op: string; left: Expr; right: Expr; span: Span } // + - * juxt (op: '+', '-', 'cdot', 'juxt', 'pm', 'mp', 'land', 'lor', 'cup', 'cap', 'mid', 'to', 'seq', ',')
   | { kind: 'UnaryOp'; op: string; operand: Expr; span: Span } // 'neg' (minus), 'lnot'
   | { kind: 'Prime'; operand: Expr; count: number; span: Span }
   | { kind: 'Frac'; num: Expr; den: Expr; span: Span }

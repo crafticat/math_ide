@@ -30,6 +30,23 @@
 //   50 postfix '            (Prime)
 //   60 ^ and _ , right-assoc (Pow / Sub)
 //
+// Three rules cut across that table; each is a parameter or a lookahead rather
+// than a binding power, because none of them is expressible as one:
+//   * A DIFFERENTIAL (dx dy dz dt du dv - see DIFFERENTIALS) is always the LAST
+//     factor of its product. Collecting a product as a '/'-operand STOPS before
+//     one, and nothing juxtaposes onto one inside that operand; what follows
+//     joins at the outer juxt level instead. So `integral(0->1) 1/x dx` is
+//     (integral (1/x)) dx and `d/dx f(x)` is (d/dx) f(x) - while a differential
+//     BY ITSELF is still a fine operand (`dy/dx`). `partial` is deliberately
+//     NOT in the set: `partial^2 u/partial x^2` keeps its operand products.
+//   * '^' and '_' share bp 60, so plain right-associativity would let each one
+//     swallow the other from inside its own ARGUMENT. It does not: a script
+//     argument accepts only the SAME operator (`a^b^c` stays right-assoc),
+//     while the sibling applies to the whole script - `a_i^2` is (a_i)^2.
+//   * A '|' met in infix position opens a JUXTAPOSED Abs when a partner bar
+//     follows in the same parse range at the same bracket depth (`2|x|`,
+//     `|x||y|`); with no partner bar it is the "divides" relation (`n | m`).
+//
 // The parser NEVER throws: every unparseable position becomes a Raw node plus
 // a warn diagnostic, and parseExpression() has a last-resort try/catch.
 //
@@ -95,6 +112,11 @@ const WORD_PREFIX: Record<string, { bp: number; op: string }> = {
 // instead of gluing `exists` onto the `0`.
 const QUANTIFIERS = new Set(['forall', 'exists', 'suchthat']);
 
+// Differentials. They resolve as ordinary Sym atoms (MATH_KEYWORDS identity)
+// but terminate the product they appear in - see the header. `partial` is not
+// one of them: it is a factor, not a closer.
+const DIFFERENTIALS = new Set(['dx', 'dy', 'dz', 'dt', 'du', 'dv']);
+
 // NOTE (judgment call): the spec names ':' and trailing '.' as seq connectors;
 // ',' and ';' get the same treatment here so that ordinary input like
 // `x = 1, y = 2` round-trips instead of tripping recovery. Inside brackets,
@@ -117,6 +139,24 @@ type Range = [number, number]; // [from, to) over the token array
 const joinSpan = (a: Span, b: Span): Span =>
   ({ startLine: a.startLine, startCol: a.startCol, endLine: b.endLine, endCol: b.endCol });
 
+// True when `e` is a differential, or a juxtaposition chain whose LAST factor
+// is one - i.e. when the product `e` stands for is already closed.
+function endsWithDifferential(e: Expr): boolean {
+  if (e.kind === 'Sym') return DIFFERENTIALS.has(e.name);
+  return e.kind === 'BinOp' && e.op === 'juxt' && endsWithDifferential(e.right);
+}
+
+// Per-call parse context. NEITHER field propagates into nested parseBinary
+// calls: both describe the operand being collected AT THIS level, and a nested
+// call is by definition a new operand.
+interface BinaryOpts {
+  // Set while collecting a '/'-operand: the product stops at a differential.
+  fracOperand?: boolean;
+  // Set while collecting the argument of '^' or '_': that operator may repeat
+  // (right-assoc chain), its sibling may not.
+  scriptOp?: string;
+}
+
 // Splits a juxtaposition chain headed by a big operator into that operator and
 // the rest of the chain; null when the chain is not headed by one (or is a
 // bare big operator with nothing juxtaposed after it).
@@ -133,8 +173,9 @@ class Parser {
   private end: number;
   private rangeStart = 0;
   // Depth of currently-open `|...|` pairs. A '|' met in infix position closes
-  // the innermost open Abs when this is > 0; with none open it is the
-  // "divides" relation (BinOp 'mid'), e.g. `{x : a | x}`.
+  // the innermost open Abs when this is > 0; with none open it either opens a
+  // juxtaposed Abs (`2|x|`) or is the "divides" relation (BinOp 'mid', e.g.
+  // `{x : a | x}`), decided by the partner-bar lookahead in parseBinary.
   private absDepth = 0;
 
   constructor(private toks: Token[], private diags: Diagnostic[]) {
@@ -176,8 +217,8 @@ class Parser {
 
   // ================= Pratt core =================
 
-  private parseBinary(minBp: number): Expr {
-    let left = this.parseUnary(minBp);
+  private parseBinary(minBp: number, opts: BinaryOpts = {}): Expr {
+    let left = this.parseUnary(minBp, opts);
 
     for (;;) {
       const t = this.peek();
@@ -192,19 +233,36 @@ class Parser {
         continue;
       }
 
-      // '|' : closes the innermost open Abs, else "divides" at level 12
+      // '|' : closes the innermost open Abs, opens a juxtaposed one at level
+      // 30, else "divides" at level 12
       if (t.kind === 'OP' && t.text === '|') {
         if (this.absDepth > 0) break; // the Abs sub-parser owns this token
-        if (BP.ARROW < minBp) break;
-        this.pos++;
-        const right = this.parseBinary(BP.ARROW + 1);
-        left = this.binop('mid', left, right);
+        // NOTE (judgment call): with no Abs open, a partner bar later in this
+        // range decides. `2|x|`, `|x||y|`, `f(x)|g(x)|` are products with an
+        // absolute value - the reading the old "always mid" rule got wrong -
+        // and `{x : a | x}` / `n | m` are still "divides". The cost is that a
+        // CHAIN of divides (`a | b | c`) now reads as `a` times `|b|` then `c`;
+        // repeated divides in one run are the rarer input by far.
+        if (this.findTop(this.pos + 1, this.end, (p) => this.isOp(p, '|')) < 0) {
+          if (BP.ARROW < minBp) break;
+          this.pos++;
+          const right = this.parseBinary(BP.ARROW + 1);
+          left = this.binop('mid', left, right);
+          continue;
+        }
+        if (BP.MUL < minBp) break;
+        // Re-enter at the factor level so parseAtom sees the '|' in prefix
+        // position (-> parseAbs) and any script binds to the Abs: `2|x|^2`.
+        left = this.binop('juxt', left, this.parseBinary(BP.MUL + 1));
         continue;
       }
 
       const inf = this.infixOf(t);
       if (inf) {
         if (inf.bp < minBp) break;
+        // Inside a script argument the SIBLING script operator stops here, so
+        // that it applies to the whole script instead: `a_i^2` = (a_i)^2.
+        if (opts.scriptOp && (inf.form === 'pow' || inf.form === 'sub') && inf.op !== opts.scriptOp) break;
         left = this.applyInfix(left, inf);
         continue;
       }
@@ -230,6 +288,9 @@ class Parser {
 
       // level 30: implicit product
       if (BP.MUL >= minBp && this.startsJuxtAtom(t)) {
+        // A '/'-operand's product ends at a differential (before one, and
+        // after the one it already holds); the outer level picks the rest up.
+        if (opts.fracOperand && (this.isDifferential(t) || endsWithDifferential(left))) break;
         left = this.binop('juxt', left, this.parseBinary(BP.MUL + 1));
         continue;
       }
@@ -262,14 +323,14 @@ class Parser {
       }
       case 'frac': {
         this.pos++;
-        return this.makeFrac(left, this.parseBinary(BP.FRAC + 1));
+        return this.makeFrac(left, this.parseBinary(BP.FRAC + 1, { fracOperand: true }));
       }
       case 'pow':
       case 'sub': {
         this.pos++;
         // `x^(1/n)` / `a_(n+1)`: the paren CONTENT is parsed as a fresh full
         // expression and is NOT wrapped in a Group.
-        const arg = this.parseSupSubArg();
+        const arg = this.parseSupSubArg(inf.op);
         return inf.form === 'pow'
           ? { kind: 'Pow', base: left, exp: arg, span: this.span(left.span, arg.span) }
           : { kind: 'Sub', base: left, sub: arg, span: this.span(left.span, arg.span) };
@@ -304,7 +365,9 @@ class Parser {
     };
   }
 
-  private parseSupSubArg(): Expr {
+  // `scriptOp` is the operator ('^' or '_') this argument belongs to; only it
+  // may chain inside the argument (see the header's script rule).
+  private parseSupSubArg(scriptOp: string): Expr {
     const t = this.peek();
     if (t && t.kind === 'LPAREN') {
       const close = this.findMatch(this.pos);
@@ -317,10 +380,10 @@ class Parser {
         return { ...inner, span: this.spanOf(open, close + 1) } as Expr;
       }
     }
-    return this.parseBinary(BP.SUP); // right-assoc: x^y^z = x^(y^z)
+    return this.parseBinary(BP.SUP, { scriptOp }); // right-assoc: x^y^z = x^(y^z)
   }
 
-  private parseUnary(minBp: number): Expr {
+  private parseUnary(minBp: number, opts: BinaryOpts = {}): Expr {
     const t = this.peek();
     const pre = !t ? undefined
       : t.kind === 'OP' && t.text === '-' ? { bp: BP.NEG, op: 'neg' }
@@ -329,8 +392,9 @@ class Parser {
     if (!pre || !t) return this.parseAtom();
     this.pos++;
     // max(prefixBp, minBp): keeps a prefix operator from reaching past the
-    // context that invoked it (e.g. `a * not b + c`).
-    const operand = this.parseBinary(Math.max(pre.bp, minBp));
+    // context that invoked it (e.g. `a * not b + c`). The operand continues the
+    // SAME operand this level is collecting, so `opts` carries over to it.
+    const operand = this.parseBinary(Math.max(pre.bp, minBp), opts);
     return { kind: 'UnaryOp', op: pre.op, operand, span: this.span(t.span, operand.span) };
   }
 
@@ -658,6 +722,10 @@ class Parser {
 
   private isOp(t: Token | undefined, text: string): boolean {
     return !!t && t.kind === 'OP' && t.text === text;
+  }
+
+  private isDifferential(t: Token): boolean {
+    return t.kind === 'WORD' && DIFFERENTIALS.has(t.text);
   }
 
   private infixOf(t: Token): Infix | null {

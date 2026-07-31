@@ -276,7 +276,10 @@ for (const c of CASES) {
 // ============================================
 // (c) Recovery robustness - never throws, always an Expr with spans
 // ============================================
-const ROBUST = [...CASES.map((c) => c.src), 'sum(i=1 ->', 'lim(x -> ', ')', '^', '{ x :', '', '   ', '|x', 'x +', ';', '[[a,b],[c,d]]', '$', '"'];
+// `x^2 dx / 3` is pathological (a differential swallowed into a numerator by
+// the level it was collected at); it has no golden shape - it only has to come
+// back as a sane Expr without throwing.
+const ROBUST = [...CASES.map((c) => c.src), 'sum(i=1 ->', 'lim(x -> ', ')', '^', '{ x :', '', '   ', '|x', 'x +', ';', '[[a,b],[c,d]]', '$', '"', 'x^2 dx / 3'];
 for (const src of ROBUST) {
   let expr = null;
   let threw = null;
@@ -356,6 +359,36 @@ const EXTRA = [
   // Equation-continuation lines (INITIAL_CONTENT lines 40/42): a run starting
   // with an infix operator gets an implicit empty left operand, no diagnostic.
   ['= f(x)', 'Relation([=],[Raw(""),Call(f,[Var(x)])])'],
+  // Differentials (dx dy dz dt du dv) always CLOSE the product they belong to:
+  // they never enter a fraction operand, and nothing juxtaposes onto them
+  // inside a product - what follows joins at the outer juxt level.
+  ['integral(0 -> 1) x^2/(1+x^3) dx',
+    'BinOp(juxt,BinOp(juxt,BigOp(integral,Num(0),Num(1)),Frac(Pow(Var(x),Num(2)),Group(BinOp(+,Num(1),Pow(Var(x),Num(3)))))),Sym(dx))'],
+  ['integral(0 -> 1) 1/x dx',
+    'BinOp(juxt,BinOp(juxt,BigOp(integral,Num(0),Num(1)),Frac(Num(1),Var(x))),Sym(dx))'],
+  // ... but a differential ALONE is a perfectly good fraction operand, and the
+  // function after it is not part of the denominator's product.
+  ['d/dx f(x)', 'BinOp(juxt,Frac(Var(d),Sym(dx)),Call(f,[Var(x)]))'],
+  ['dy/dx', 'Frac(Sym(dy),Sym(dx))'],
+  // Scripts: '_' and '^' are siblings at bp 60, so neither may be swallowed by
+  // the OTHER's argument; same-operator chains stay right-assoc.
+  ['a_i^2', 'Pow(Sub(Var(a),Var(i)),Num(2))'],
+  ['a^b_c', 'Sub(Pow(Var(a),Var(b)),Var(c))'],
+  ['a^b^c', 'Pow(Var(a),Pow(Var(b),Var(c)))'],
+  ['a_b_c', 'Sub(Var(a),Sub(Var(b),Var(c)))'],
+  ['x_n^2 + y_n^2', 'BinOp(+,Pow(Sub(Var(x),Var(n)),Num(2)),Pow(Sub(Var(y),Var(n)),Num(2)))'],
+  // A parenthesized script argument is a fresh expression: the sibling-script
+  // restriction does not reach inside it.
+  ['a_(i^2)', 'Sub(Var(a),Pow(Var(i),Num(2)))'],
+  // A '|' met in infix position with a partner bar later in the range opens a
+  // juxtaposed Abs; with no partner it is still "divides" (BinOp mid).
+  ['2|x|', 'BinOp(juxt,Num(2),Abs(Var(x)))'],
+  ['|x||y|', 'BinOp(juxt,Abs(Var(x)),Abs(Var(y)))'],
+  ['f(x)|g(x)|', 'BinOp(juxt,Call(f,[Var(x)]),Abs(Call(g,[Var(x)])))'],
+  // The juxtaposed Abs is parsed as a full factor, so a script binds to IT.
+  ['2|x|^2', 'BinOp(juxt,Num(2),Pow(Abs(Var(x)),Num(2)))'],
+  ['n | m', 'BinOp(mid,Var(n),Var(m))'],
+  ['{ x : a | x }', 'SetBuilder(Var(x),BinOp(mid,Var(a),Var(x)))'],
   // The real quantifier line from INITIAL_CONTENT.
   ['exists del > 0 suchthat |f(t) - f(x)| < eps forall t in (x - del, x + del)',
     'BinOp(seq,BinOp(seq,BinOp(juxt,Sym(exists),Relation([>],[Ident(del),Num(0)])),' +
