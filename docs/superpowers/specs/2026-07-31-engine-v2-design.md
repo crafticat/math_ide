@@ -82,7 +82,8 @@ Input: a statement's token stream. Output: each WORD token tagged `prose | math`
 
 Mechanism: a **feature-scoring function with one tunable weight table**, not a rule cascade. Features include:
 
-- Absolute overrides: inside STRING → prose; inside MATH_QUOTE, set-builder, function arguments, subscripts, cases, matrices → math; known math keyword/symbol → math.
+- Absolute overrides: inside STRING → prose; inside MATH_QUOTE, set-builder, function arguments, subscripts, cases, matrices → math; function keywords in call form (`sum(`, `sqrt(`) → math.
+- Bare math keywords carry a *strong* math weight, not an absolute one — prose context can win ("We use the sum and product rules" renders as a sentence; `sum(i=1 -> n)` is always Σ).
 - Strong priors: single alphabetic char → math; multi-char word in stop-word lexicon → prose; multi-char unknown word → prose.
 - Context features (the vision, made literal): classes of nearest non-punctuation neighbors on each side (prose-word / single-letter / number / operator), comma immediately before (`, and` → prose), quantifier or logic operator present in the statement, capitalized-single-letter neighbor patterns (`in A` → membership).
 - Ambiguous words (`and`, `or`, `not`, `in`, article `a`) are just words with weights — no special-cased code paths.
