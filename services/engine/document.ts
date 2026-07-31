@@ -12,10 +12,47 @@
 // each line is classified by its token shape (scope-open / subtask-open /
 // claim-open / close / define / plain statement) before any expression-level
 // meaning is assigned.
+//
+// Rules 1-11, as implemented below - this numbering is LOCAL to this file
+// (in-code "rule N" comments point back to this list; they are not indices
+// into any external plan document):
+//   1.  Blank line (empty, or comment-only after COMMENT tokens are
+//       stripped) -> Blank block.
+//   2.  `#define NAME replacement...` -> register macro NAME (storing both
+//       its already-lexed replacement Token[] verbatim, and a joined-text
+//       form for display) and emit a Blank; an empty replacement is
+//       diagnosed and left unregistered instead of erasing later usages.
+//   3.  Macro expansion: a WORD token matching a registered macro name is
+//       replaced by its stored replacement tokens, re-spanned to the usage
+//       site; deliberately single-pass (no recursive re-expansion).
+//   4.  Scope open: WORD (case-insensitive match against SCOPES, 'cases'
+//       excluded) ... LBRACE -> Scope block; its title text is joined with
+//       the same single-space/dot-attachment rule as rule 2's replacement
+//       text.
+//   5.  Subtask open: 1-4 leading OP:'-' tokens (depth) ... LBRACE ->
+//       Subtask block; more than 4 dashes, or no trailing LBRACE, is just a
+//       plain Statement instead.
+//   6.  Claim open: PUNCT:'?' OP:':' ... LBRACE -> Claim block carrying the
+//       goal's statement tokens.
+//   7.  Close line: a line that is EXACTLY one RBRACE token closes the
+//       current block; at top level (no enclosing block) it is instead an
+//       "unmatched }" diagnostic plus a Blank.
+//   8.  Anything else is a plain Statement carrying its (macro-expanded)
+//       tokens.
+//   9.  Multi-line merge: a would-be Statement whose bracket imbalance was
+//       opened by a cases{/matrix(-family trigger absorbs following lines
+//       until the bracket stack rebalances (or EOF, diagnosed as unclosed),
+//       synthesizing a ';' between absorbed lines while the INNERMOST
+//       currently-open frame is the 'cases' trigger.
+//   10. A Scope/Subtask/Claim still open at EOF is still returned (with
+//       whatever children it collected so far) plus an "unclosed ..." info
+//       diagnostic, rather than being dropped.
+//   11. Every Block's span covers its own line through its last
+//       descendant's line, built from the first/last token of the
+//       first/last physical line.
 
 import type { Token, Diagnostic, DocumentAst, Block, Span } from './types';
 import { SCOPES, MATH_PACKAGE, FUNCTIONS } from './language';
-import { lex } from './lexer';
 
 // Extension carried by Statement & Claim blocks: their raw statement tokens,
 // for later pipeline stages to read via `(block as Block & StatementTokens).tokens`.
@@ -100,7 +137,10 @@ function joinTokenTexts(tokens: Token[]): string {
 // Replaces every WORD token whose text is a known macro name with the tokens
 // of its (already-lexed-at-definition-time) replacement, re-spanning each
 // spliced token to the ORIGINAL word's span so spans always point into the
-// real source.
+// real source. Deliberately single-pass: this loop only ever scans the
+// INPUT `tokens` list once, so if a macro's own replacement tokens happen
+// to include another macro's name, that name is emitted as-is and NOT
+// itself re-expanded - no recursion.
 function expandMacros(tokens: Token[], macroTokens: Map<string, Token[]>): Token[] {
   const out: Token[] = [];
   for (const t of tokens) {
@@ -205,6 +245,10 @@ function scanBracketStack(tokens: Token[], stack: BracketFrame[]): BracketFrame[
       if (t.kind === 'LPAREN' && prev && prev.kind === 'WORD' && MATRIX_WORDS.has(prev.text)) trigger = 'matrix';
       result.push({ kind: t.kind, trigger });
     } else if (t.kind === 'RBRACE' || t.kind === 'RPAREN' || t.kind === 'RBRACKET') {
+      // Pops whatever frame is on top regardless of whether ITS kind
+      // matches this closer's kind (e.g. a stray '}' popping a '(' frame) -
+      // deliberate recovery-leniency for malformed input, not an assumption
+      // that brackets are always well-nested.
       if (result.length > 0) result.pop();
     }
   }
@@ -215,15 +259,21 @@ interface MergeResult { tokens: Token[]; nextIdx: number; unclosed: boolean }
 
 // Absorbs lines[startIdx+1..] into `firstContent` until the bracket stack
 // (seeded from firstContent's own imbalance) returns to empty, inserting a
-// synthetic OP:';' between adjacent absorbed lines when trigger==='cases' -
-// but never right after the opening LBRACE nor right before the closing
-// RBRACE (those boundaries are "opening"/"closing" lines, not body-to-body
-// boundaries). Runs to EOF (unclosed:true) if balance never returns to 0.
+// synthetic OP:';' between adjacent absorbed lines when the INNERMOST
+// currently-open frame at that boundary is itself a 'cases' trigger - this
+// is checked against the LIVE stack at each line boundary, not the
+// outermost trigger that gated entry into this function in the first
+// place, so a matrix(...)/bracket body opened *inside* a cases{} (e.g. a
+// matrix literal spanning lines inside one of the case branches) does not
+// get a ';' spliced into its own arguments while its frame is the innermost
+// one - but never right after the opening LBRACE nor right before the
+// closing RBRACE (those boundaries are "opening"/"closing" lines, not
+// body-to-body boundaries). Runs to EOF (unclosed:true) if balance never
+// returns to 0.
 function mergeStatementLines(
   lines: DocLine[],
   startIdx: number,
   firstContent: Token[],
-  trigger: 'cases' | 'matrix',
   initialStack: BracketFrame[],
 ): MergeResult {
   const merged: Token[] = firstContent.slice();
@@ -234,7 +284,8 @@ function mergeStatementLines(
       return { tokens: merged, nextIdx: idx, unclosed: true };
     }
     const lineContent = stripComments(lines[idx].tokens);
-    if (trigger === 'cases' && merged.length > 0 && lineContent.length > 0) {
+    const innermost = stack[stack.length - 1];
+    if (innermost.trigger === 'cases' && merged.length > 0 && lineContent.length > 0) {
       const prevLast = merged[merged.length - 1];
       const nextFirst = lineContent[0];
       if (prevLast.text !== ';' && prevLast.kind !== 'LBRACE' && nextFirst.kind !== 'RBRACE') {
@@ -313,10 +364,16 @@ function parseBlockAt(
       if (replacementTokens.length === 0) {
         diagnostics.push({ span: nameTok.span, severity: 'warn', message: `#define ${nameTok.text} has no replacement — ignored` });
       } else {
-        const replacementText = joinTokenTexts(replacementTokens);
-        macros[nameTok.text] = replacementText;
-        const lexedReplacement = lex(replacementText).tokens.filter((t) => t.kind !== 'NEWLINE');
-        macroTokens.set(nameTok.text, lexedReplacement);
+        // Store the ALREADY-LEXED replacement tokens verbatim - NOT a
+        // join-to-text-then-re-lex round-trip. Re-lexing would destroy
+        // token-kind information the original lex pass already captured:
+        // e.g. a STRING token's `.text` is the INNER content only (quotes
+        // stripped, per types.ts), so re-lexing the joined text would
+        // silently turn `"by induction"` into two bare WORD tokens and lose
+        // the fact it was ever a string. The joined text is still computed,
+        // but only for the human-readable `macros` display table.
+        macros[nameTok.text] = joinTokenTexts(replacementTokens);
+        macroTokens.set(nameTok.text, replacementTokens);
       }
     }
     return { block: { kind: 'Blank', span: lineSpanBounds(line) }, nextIdx: idx + 1 };
@@ -371,9 +428,9 @@ function parseBlockAt(
   const initialStack = scanBracketStack(content, []);
   if (initialStack.length > 0 && initialStack[0].trigger) {
     const trigger = initialStack[0].trigger;
-    const merge = mergeStatementLines(lines, idx, content, trigger, initialStack);
+    const merge = mergeStatementLines(lines, idx, content, initialStack);
     if (merge.unclosed) {
-      diagnostics.push({ span: lineSpanBounds(line), severity: 'warn', message: 'unclosed cases/matrix — merged to end of file' });
+      diagnostics.push({ span: lineSpanBounds(line), severity: 'warn', message: `unclosed ${trigger} — merged to end of file` });
     }
     const endLine = lines[Math.min(merge.nextIdx, lines.length) - 1] ?? line;
     const span = combineSpans(lineSpanBounds(line), lineSpanBounds(endLine));

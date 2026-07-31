@@ -358,8 +358,19 @@ Problem 3 {
   check('UnclosedCases', 'unclosed cases{} merges to EOF as a single Statement', ast.blocks.length === 1 && ast.blocks[0].kind === 'Statement');
   check(
     'UnclosedCases',
-    'diagnostic warn "unclosed cases/matrix — merged to end of file"',
-    diagnostics.some((d) => d.severity === 'warn' && d.message === 'unclosed cases/matrix — merged to end of file'),
+    'diagnostic warn "unclosed cases — merged to end of file" (names the triggering construct)',
+    diagnostics.some((d) => d.severity === 'warn' && d.message === 'unclosed cases — merged to end of file'),
+  );
+}
+
+// Rule 9: unclosed matrix(...) at EOF names 'matrix' in the diagnostic, not 'cases'.
+{
+  const { ast, diagnostics } = parse('A = matrix([[1, 2]');
+  check('UnclosedMatrixEOF', 'unclosed matrix(...) merges to EOF as a single Statement', ast.blocks.length === 1 && ast.blocks[0].kind === 'Statement');
+  check(
+    'UnclosedMatrixEOF',
+    'diagnostic warn "unclosed matrix — merged to end of file" (names matrix, not cases)',
+    diagnostics.some((d) => d.severity === 'warn' && d.message === 'unclosed matrix — merged to end of file'),
   );
 }
 
@@ -426,6 +437,153 @@ Problem 3 {
     'ScopeTitlePeriod',
     'Scope(Problem) title is "1. Basics" (sentence period keeps its space, unlike a MATH_PACKAGE name)',
     ast.blocks.length === 1 && ast.blocks[0].kind === 'Scope' && ast.blocks[0].title === '1. Basics',
+  );
+}
+
+// ============================================
+// Quality-review round 2: macro tokens preserved verbatim (not re-lexed);
+// ';' synthesis keyed on the innermost open frame (not the whole-merge
+// trigger); the merge gate never engages for a generic unbalanced paren;
+// EOF diagnostics for Subtask/Claim; nested-Subtask depth tracking.
+// ============================================
+
+// Proves fix 1: a string-valued macro's quotes must survive expansion. Under
+// the old join-text-then-re-lex implementation, `"by induction"` lost its
+// quotes (STRING.text is inner-only) and was re-lexed back as two bare WORD
+// tokens - the STRING kind never came back. Storing the already-lexed
+// replacement Token[] verbatim fixes this.
+{
+  const { ast } = parse('#define note "by induction"\nThen note done');
+  check(
+    'MacroString',
+    'blocks are exactly [Blank (the #define line), Statement]',
+    ast.blocks.length === 2 && ast.blocks[0].kind === 'Blank' && ast.blocks[1].kind === 'Statement',
+  );
+  const stmt = ast.blocks[1] || {};
+  check(
+    'MacroString',
+    'Statement.tokens === [WORD:Then, STRING:by induction, WORD:done] (macro-expanded STRING token, quotes-content intact)',
+    arraysEqual(tseq(stmt.tokens || []), ['WORD:Then', 'STRING:by induction', 'WORD:done']),
+  );
+  check('MacroString', 'the expanded token really is kind STRING (not WORD/WORD from a re-lexed join)', (stmt.tokens || []).some((t) => t.kind === 'STRING' && t.text === 'by induction'));
+  check('MacroString', 'macros.note display value is still the joined text "by induction"', ast.macros.note === 'by induction');
+}
+
+// Proves fix 2: a matrix(...) literal spanning multiple lines *inside* a
+// multi-line cases{} must not get a synthetic ';' spliced into its own
+// argument list. The ';' insertion must look at the INNERMOST open bracket
+// frame at each line boundary, not the outer 'cases' trigger that gated
+// entry into the merge in the first place.
+{
+  const src = 'cases {\n  y = matrix([[1,\n  2]])\n  z otherwise\n}';
+  const { ast } = parse(src);
+  check('NestedMatrixInCases', 'produces exactly one top-level Statement block', ast.blocks.length === 1 && ast.blocks[0].kind === 'Statement');
+  const stmt = ast.blocks[0] || {};
+  const texts = tseq(stmt.tokens || []);
+  const semicolons = (stmt.tokens || []).filter((t) => t.kind === 'OP' && t.text === ';');
+  check('NestedMatrixInCases', 'exactly one OP:; was synthesized (one per cases-body boundary, not one per absorbed line)', semicolons.length === 1);
+
+  const matrixIdx = texts.indexOf('WORD:matrix');
+  const closeParenIdx = texts.indexOf('RPAREN:)');
+  const insideMatrix = texts.slice(matrixIdx, closeParenIdx + 1);
+  check(
+    'NestedMatrixInCases',
+    'no ; anywhere inside the matrix(...) call itself (between WORD:matrix and its closing RPAREN) - the corrupt-args bug',
+    matrixIdx !== -1 && closeParenIdx !== -1 && !insideMatrix.includes('OP:;'),
+  );
+  check(
+    'NestedMatrixInCases',
+    'the matrix args are untouched: ...NUMBER:1 OP:, NUMBER:2... survives as one contiguous run',
+    insideMatrix.join('|').includes('NUMBER:1|OP:,|NUMBER:2'),
+  );
+
+  const semiIdx = texts.indexOf('OP:;');
+  check(
+    'NestedMatrixInCases',
+    'the ; sits right after the matrix(...) call closes (RPAREN) and right before the next case branch (WORD:z) - back at the cases-body top level',
+    semiIdx > 0 && texts[semiIdx - 1] === 'RPAREN:)' && texts[semiIdx + 1] === 'WORD:z',
+  );
+}
+
+// Item 3: the merge gate itself must key on the OUTERMOST trigger of the
+// FIRST line's own imbalance - a plain unbalanced '(' with no cases/matrix
+// trigger anywhere must never engage the multi-line merge/absorb machinery,
+// no matter how the innermost-frame check inside the merge loop is written.
+{
+  const { ast } = parse('f(x = 1\ny = 2');
+  check(
+    'MergeGateNegative',
+    'unbalanced "(" with no cases/matrix trigger must NOT merge across lines: stays TWO Statement blocks',
+    ast.blocks.length === 2 && ast.blocks[0].kind === 'Statement' && ast.blocks[1].kind === 'Statement',
+  );
+  check(
+    'MergeGateNegative',
+    'first Statement.tokens === [WORD:f, LPAREN:(, WORD:x, OP:=, NUMBER:1] (line 1 only, not absorbing line 2)',
+    arraysEqual(tseq((ast.blocks[0] || {}).tokens || []), ['WORD:f', 'LPAREN:(', 'WORD:x', 'OP:=', 'NUMBER:1']),
+  );
+  check(
+    'MergeGateNegative',
+    'second Statement.tokens === [WORD:y, OP:=, NUMBER:2]',
+    arraysEqual(tseq((ast.blocks[1] || {}).tokens || []), ['WORD:y', 'OP:=', 'NUMBER:2']),
+  );
+}
+
+// Item 6a: unclosed `- subtask {` at EOF -> Subtask still returned + exactly
+// 1 info diagnostic "unclosed subtask".
+{
+  const { ast, diagnostics } = parse('- subtask {');
+  check(
+    'UnclosedSubtask',
+    'Subtask(depth 1, title "subtask") is present in blocks',
+    ast.blocks.some((b) => b.kind === 'Subtask' && b.depth === 1 && b.title === 'subtask'),
+  );
+  const infoDiags = diagnostics.filter((d) => d.severity === 'info');
+  check(
+    'UnclosedSubtask',
+    'exactly 1 info diagnostic, message "unclosed subtask"',
+    infoDiags.length === 1 && infoDiags[0].message === 'unclosed subtask',
+  );
+}
+
+// Item 6b: unclosed `?: x {` -> Claim still returned + exactly 1 info
+// diagnostic "unclosed claim".
+{
+  const { ast, diagnostics } = parse('?: x {');
+  check('UnclosedClaim', 'Claim is present in blocks', ast.blocks.some((b) => b.kind === 'Claim'));
+  const infoDiags = diagnostics.filter((d) => d.severity === 'info');
+  check(
+    'UnclosedClaim',
+    'exactly 1 info diagnostic, message "unclosed claim"',
+    infoDiags.length === 1 && infoDiags[0].message === 'unclosed claim',
+  );
+}
+
+// Item 6c: nesting - `- outer {` containing `-- inner {` containing a plain
+// statement -> Subtask depth 1 containing Subtask depth 2 containing
+// Statement, both closing cleanly (no unclosed diagnostics).
+{
+  const { ast, diagnostics } = parse('- outer {\n-- inner {\nx\n}\n}');
+  check(
+    'NestedSubtasks',
+    'top level is exactly one Subtask (depth 1, title "outer")',
+    ast.blocks.length === 1 && ast.blocks[0].kind === 'Subtask' && ast.blocks[0].depth === 1 && ast.blocks[0].title === 'outer',
+  );
+  const outer = ast.blocks[0] || {};
+  check(
+    'NestedSubtasks',
+    'outer has exactly 1 child: Subtask (depth 2, title "inner")',
+    Array.isArray(outer.children) && outer.children.length === 1 && outer.children[0].kind === 'Subtask' && outer.children[0].depth === 2 && outer.children[0].title === 'inner',
+  );
+  const inner = (outer.children || [])[0] || {};
+  check(
+    'NestedSubtasks',
+    'inner has exactly 1 child: Statement with tokens === [WORD:x]',
+    Array.isArray(inner.children) && inner.children.length === 1 && inner.children[0].kind === 'Statement' && arraysEqual(tseq(inner.children[0].tokens || []), ['WORD:x']),
+  );
+  check(
+    'NestedSubtasks',
+    'both subtasks closed cleanly (no "unclosed subtask" diagnostics leaked)',
+    !diagnostics.some((d) => d.message === 'unclosed subtask'),
   );
 }
 
