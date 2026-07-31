@@ -91,7 +91,14 @@ const CASES = [
 ];
 
 for (const [input, expected] of CASES) {
-  check('Tokens', `${JSON.stringify(input)} -> ${expected.join(' ')}`, arraysEqual(seqOf(input), expected));
+  const actual = seqOf(input);
+  const ok = arraysEqual(actual, expected);
+  // On failure, show what the lexer actually produced alongside what was
+  // expected - "expected X" alone doesn't say how it diverged.
+  const label = ok
+    ? `${JSON.stringify(input)} -> ${expected.join(' ')}`
+    : `${JSON.stringify(input)} -> ${expected.join(' ')} (actual: ${actual.join(' ')})`;
+  check('Tokens', label, ok);
 }
 
 // ============================================
@@ -100,11 +107,14 @@ for (const [input, expected] of CASES) {
 // (span includes the delimiters) and COMMENT (text already includes '//',
 // span covers the whole comment). Concatenating (gap + span-slice) across a
 // line's tokens, in column order, must reconstruct that normalized line
-// exactly, and every gap must be pure whitespace (space/tab) - this also
-// proves normalization ran before spans were computed (e.g. '·' shifts
-// columns via its ' dot ' expansion) since we reconstruct against
-// `normalized`, not the original input.
+// exactly, and every gap must be pure whitespace (space/tab/CR - CR is
+// skipped like whitespace by the lexer, so it never gets its own token)
+// - this also proves normalization ran before spans were computed (e.g.
+// '·' shifts columns via its ' dot ' expansion) since we reconstruct
+// against `normalized`, not the original input.
 // ============================================
+const WHITESPACE_GAP = /^[ \t\r]*$/;
+
 function checkSpanIntegrity(input, label) {
   const { tokens, normalized } = lex(input);
   const lines = normalized.split('\n');
@@ -125,7 +135,7 @@ function checkSpanIntegrity(input, label) {
     let rebuilt = '';
     for (const t of lineTokens) {
       const gap = lineStr.slice(cursor, t.span.startCol);
-      if (!/^[ \t]*$/.test(gap)) {
+      if (!WHITESPACE_GAP.test(gap)) {
         ok = false;
         problems.push(`non-whitespace gap ${JSON.stringify(gap)} before ${t.kind}:${t.text} on line ${lineNo}`);
       }
@@ -142,7 +152,7 @@ function checkSpanIntegrity(input, label) {
       cursor = t.span.endCol;
     }
     const trailingGap = lineStr.slice(cursor);
-    if (!/^[ \t]*$/.test(trailingGap)) {
+    if (!WHITESPACE_GAP.test(trailingGap)) {
       ok = false;
       problems.push(`non-whitespace trailing gap ${JSON.stringify(trailingGap)} on line ${lineNo}`);
     }
@@ -160,6 +170,15 @@ for (const [input] of CASES) checkSpanIntegrity(input);
 checkSpanIntegrity('x = 1\ny = 2', 'multi-line input reconstructs each line');
 checkSpanIntegrity('"abc', 'unterminated string reconstructs to EOL');
 checkSpanIntegrity('$abc', 'unterminated math-quote reconstructs to EOL');
+// PUNCT fallback cases (see Fallback section below) also carry real spans.
+checkSpanIntegrity('a ! b', 'PUNCT fallback (lone "!") reconstructs');
+checkSpanIntegrity('@#%&`?', 'PUNCT fallback (run of unrecognized symbols) reconstructs');
+// CRLF: '\r' is skipped like whitespace, so it must show up as part of the
+// (whitespace-only) gap rather than breaking reconstruction.
+checkSpanIntegrity('x = 1\r\ny = 2', 'CRLF line ending reconstructs on both lines');
+// Astral safety: '😀' is a surrogate pair (2 UTF-16 code units); its PUNCT
+// span must cover both units without splitting the pair.
+checkSpanIntegrity('a😀b', 'astral character (emoji) span reconstructs without splitting the surrogate pair');
 
 // ============================================
 // (b) Unterminated string: exactly 1 diagnostic, severity 'warn', STRING runs to EOL
@@ -237,6 +256,54 @@ check('Fallback', "lone '!' (not followed by '=') lexes as a single PUNCT token"
 check('Fallback', 'lexing unrecognized characters never throws', (() => {
   try { lex('@#%&`?'); return true; } catch { return false; }
 })());
+
+// ============================================
+// CRLF: '\r' is treated as whitespace (like space/tab), so a CRLF line
+// ending produces no stray PUNCT token for the '\r' itself.
+// ============================================
+check('CRLF', "'x = 1\\r\\ny = 2' has no PUNCT token (the \\r is skipped, not fallen-through)", !lex('x = 1\r\ny = 2').tokens.some((t) => t.kind === 'PUNCT'));
+check('CRLF', "'x = 1\\r\\ny = 2' token sequence matches the CRLF-free equivalent", arraysEqual(seqOf('x = 1\r\ny = 2'), seqOf('x = 1\ny = 2')));
+
+// ============================================
+// Astral safety: a character outside the BMP (e.g. an emoji) is stored as
+// a surrogate pair (2 UTF-16 code units). The PUNCT fallback must read and
+// advance over the whole code point, not one half of the pair.
+// ============================================
+check('Astral', "'😀' alone lexes as a single PUNCT token holding the full emoji, not half a surrogate pair", (() => {
+  const tok = lex('😀').tokens.filter((t) => t.kind !== 'NEWLINE');
+  return tok.length === 1 && tok[0].kind === 'PUNCT' && tok[0].text === '😀';
+})());
+check('Astral', "'a😀b' -> WORD PUNCT WORD (the emoji does not merge with or truncate its neighbors)", arraysEqual(seqOf('a😀b'), ['WORD:a', 'PUNCT:😀', 'WORD:b']));
+
+// ============================================
+// Fuzz: a seeded, deterministic PRNG (mulberry32 - NOT Math.random, so
+// runs are reproducible) drives 300 random strings over a small alphabet
+// spanning letters/digits/quotes/newline/CR/unicode-normalization
+// triggers/operators/brackets/an astral emoji. For each: lex() must not
+// throw, and its spans must reconstruct (checkSpanIntegrity, reused as-is)
+// - which, via that helper's whitespace-only-gap rule, is exactly the
+// guarantee that every non-whitespace character ends up under some token's
+// span.
+// ============================================
+function mulberry32(seed) {
+  return () => {
+    seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const FUZZ_ALPHABET = ['a', 'x', 'Z', '1', '9', '"', '$', '\n', '\r', '·', '≤', '<', '=', '>', '+', '-', '_', '^', '|', '(', ')', '{', '}', ' ', '!', '😀'];
+const rng = mulberry32(1234);
+for (let n = 0; n < 300; n++) {
+  const len = Math.floor(rng() * 41); // 0..40
+  let s = '';
+  for (let k = 0; k < len; k++) s += FUZZ_ALPHABET[Math.floor(rng() * FUZZ_ALPHABET.length)];
+  let threw = false;
+  try { lex(s); } catch { threw = true; }
+  check('Fuzz', `seed 1234 case #${n} ${JSON.stringify(s)} -> lex() does not throw`, !threw);
+  if (!threw) checkSpanIntegrity(s, `seed 1234 case #${n} ${JSON.stringify(s)} -> spans reconstruct (full non-whitespace coverage)`);
+}
 
 // ============================================
 // Summary
