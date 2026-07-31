@@ -40,6 +40,7 @@ export const SYMBOL_MAP: Record<string, string> = {
   'and': '\\land',
   'or': '\\lor',
   'not': '\\neg',
+  // NOTE: greek entries below are legacy-inherited duplicates of GREEK. GREEK is authoritative for greek lookup; these stay only for exact-port fidelity and are asserted identical in tests. Collapse once engine lookup order is final.
   // Greek
   'delta': '\\delta', 'alpha': '\\alpha', 'beta': '\\beta', 'gamma': '\\gamma', 'epsilon': '\\epsilon',
   'theta': '\\theta', 'lambda': '\\lambda', 'sigma': '\\sigma', 'omega': '\\omega', 'pi': '\\pi',
@@ -229,6 +230,7 @@ export const MATH_PACKAGE: Record<string, string> = {
 };
 
 // ---- RELATION_WORDS ----
+// feeds the Relation.ops whitelist in types.ts (words usable as n-ary relation operators)
 export const RELATION_WORDS: Set<string> = new Set([
   'in', 'notin', 'subset', 'congruent', 'similar', 'parallel', 'perp', 'corresponds',
 ]);

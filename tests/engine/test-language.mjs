@@ -117,6 +117,42 @@ const {
 }
 
 // ============================================
+// Consistency: every key present in both SYMBOL_MAP and GREEK has identical values
+// ============================================
+{
+  const greekKeys = Object.keys(GREEK || {});
+  const sharedKeys = greekKeys.filter((k) => Object.prototype.hasOwnProperty.call(SYMBOL_MAP || {}, k));
+  const mismatches = sharedKeys.filter((k) => SYMBOL_MAP[k] !== GREEK[k]);
+  check(
+    'Consistency',
+    `every key present in both SYMBOL_MAP and GREEK has identical values (${sharedKeys.length} checked)${mismatches.length ? ` (mismatched: ${mismatches.join(', ')})` : ''}`,
+    sharedKeys.length > 0 && mismatches.length === 0,
+  );
+}
+
+// ============================================
+// Values: exact spot-checks
+// ============================================
+check('Values', "SYMBOL_MAP['=>'] === '\\implies'", SYMBOL_MAP && SYMBOL_MAP['=>'] === '\\implies');
+check('Values', "SYMBOL_MAP['suchthat'] === '\\text{ s.t. }'", SYMBOL_MAP && SYMBOL_MAP['suchthat'] === '\\text{ s.t. }');
+check('Values', "SYMBOL_MAP['QED'] === '\\quad \\blacksquare'", SYMBOL_MAP && SYMBOL_MAP['QED'] === '\\quad \\blacksquare');
+check('Values', "SYMBOL_MAP['|'] === '\\mid'", SYMBOL_MAP && SYMBOL_MAP['|'] === '\\mid');
+check('Values', "SYMBOL_MAP['+-'] === '\\pm'", SYMBOL_MAP && SYMBOL_MAP['+-'] === '\\pm');
+check('Values', "SYMBOL_MAP['in'] === '\\in'", SYMBOL_MAP && SYMBOL_MAP['in'] === '\\in');
+check('Values', "GREEK['eps'] === '\\varepsilon'", GREEK && GREEK['eps'] === '\\varepsilon');
+check('Values', "GREEK['partial'] === '\\partial'", GREEK && GREEK['partial'] === '\\partial');
+check('Values', "GREEK['inf'] === '\\infty'", GREEK && GREEK['inf'] === '\\infty');
+check('Values', "MATH_PACKAGE['Math.reals'] === '\\mathbb{R}'", MATH_PACKAGE && MATH_PACKAGE['Math.reals'] === '\\mathbb{R}');
+check('Values', "MATH_PACKAGE['Math.e'] === 'e'", MATH_PACKAGE && MATH_PACKAGE['Math.e'] === 'e');
+check('Values', "SCOPES['Proof'] === 'italic'", SCOPES && SCOPES['Proof'] === 'italic');
+check('Values', "SCOPES['Theorem'] === 'bold'", SCOPES && SCOPES['Theorem'] === 'bold');
+check('Values', "FUNCTIONS['choose'].arity === 2", !!(FUNCTIONS && FUNCTIONS['choose'] && FUNCTIONS['choose'].arity === 2));
+check('Values', "FUNCTIONS['factorial'].arity === 1", !!(FUNCTIONS && FUNCTIONS['factorial'] && FUNCTIONS['factorial'].arity === 1));
+check('Values', "FUNCTIONS['sum'].kind === 'big'", !!(FUNCTIONS && FUNCTIONS['sum'] && FUNCTIONS['sum'].kind === 'big'));
+check('Values', "FUNCTIONS['cases'].kind === 'matrix'", !!(FUNCTIONS && FUNCTIONS['cases'] && FUNCTIONS['cases'].kind === 'matrix'));
+check('Values', "FUNCTIONS['abs'].kind === 'delim'", !!(FUNCTIONS && FUNCTIONS['abs'] && FUNCTIONS['abs'].kind === 'delim'));
+
+// ============================================
 // Summary
 // ============================================
 console.log('\n' + '═'.repeat(50));
