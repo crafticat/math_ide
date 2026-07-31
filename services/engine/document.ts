@@ -14,7 +14,7 @@
 // meaning is assigned.
 
 import type { Token, Diagnostic, DocumentAst, Block, Span } from './types';
-import { SCOPES } from './language';
+import { SCOPES, MATH_PACKAGE, FUNCTIONS } from './language';
 import { lex } from './lexer';
 
 // Extension carried by Statement & Claim blocks: their raw statement tokens,
@@ -66,9 +66,34 @@ function lineSpanBounds(line: DocLine): Span {
 const combineSpans = (start: Span, end: Span): Span => ({ startLine: start.startLine, startCol: start.startCol, endLine: end.endLine, endCol: end.endCol });
 
 // ---- Title / replacement-text joining (rules 2 & 4): single-space join,
-// then collapse whitespace around '.' so `Math . naturals` -> `Math.naturals`. ----
+// EXCEPT a '.' token never gets a space before it (punctuation always
+// attaches to the token on its left), and only loses its trailing space too
+// when the resulting `left.right` is a MATH_PACKAGE key - so `Math . naturals`
+// joins into the identifier `Math.naturals`, while an ordinary sentence
+// period like `1. Basics` keeps its trailing space instead of gluing to the
+// next word (previously a blanket `\s*\.\s*` -> `.` collapse mangled this). ----
 function joinTokenTexts(tokens: Token[]): string {
-  return tokens.map((t) => t.text).join(' ').replace(/\s*\.\s*/g, '.');
+  let out = '';
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (i === 0) {
+      out = tok.text;
+      continue;
+    }
+    if (tok.kind === 'OP' && tok.text === '.') {
+      out += tok.text; // never a space before '.'
+      continue;
+    }
+    const prev = tokens[i - 1];
+    if (prev.kind === 'OP' && prev.text === '.') {
+      const left = tokens[i - 2];
+      const isPackageName = !!left && Object.prototype.hasOwnProperty.call(MATH_PACKAGE, `${left.text}.${tok.text}`);
+      out += (isPackageName ? '' : ' ') + tok.text;
+      continue;
+    }
+    out += ` ${tok.text}`;
+  }
+  return out;
 }
 
 // ---- Macro expansion (rule 3) ----
@@ -159,7 +184,15 @@ const isCloseLine = (content: Token[]): boolean => content.length === 1 && conte
 // generic unbalanced paren typo must not swallow the rest of the file.
 type MergeTrigger = 'cases' | 'matrix' | null;
 interface BracketFrame { kind: 'LBRACE' | 'LPAREN' | 'LBRACKET'; trigger: MergeTrigger }
-const MATRIX_WORDS = new Set(['matrix', 'bmatrix', 'vmatrix']);
+// Derived from language.ts's FUNCTIONS table (kind === 'matrix') instead of a
+// hardcoded list, so it can't drift out of sync with the language table.
+// 'cases' is excluded: it's brace-triggered (see scanBracketStack below), not
+// paren-triggered like the true matrix environments.
+const MATRIX_WORDS = new Set(
+  Object.entries(FUNCTIONS)
+    .filter(([name, def]) => def.kind === 'matrix' && name !== 'cases')
+    .map(([name]) => name),
+);
 
 function scanBracketStack(tokens: Token[], stack: BracketFrame[]): BracketFrame[] {
   const result = stack.slice();
@@ -269,14 +302,22 @@ function parseBlockAt(
   }
 
   // Rule 2: #define name replacement... -> record macro, produce Blank.
+  // An empty replacement (`#define N` with nothing after the name) would
+  // otherwise register a macro whose expansion is zero tokens, silently
+  // ERASING every later occurrence of the name - so that case is diagnosed
+  // instead and the macro is left unregistered (later `N` tokens pass through).
   if (isDefineLine(content)) {
     const nameTok = content[2];
     if (nameTok && nameTok.kind === 'WORD') {
       const replacementTokens = content.slice(3);
-      const replacementText = joinTokenTexts(replacementTokens);
-      macros[nameTok.text] = replacementText;
-      const lexedReplacement = lex(replacementText).tokens.filter((t) => t.kind !== 'NEWLINE');
-      macroTokens.set(nameTok.text, lexedReplacement);
+      if (replacementTokens.length === 0) {
+        diagnostics.push({ span: nameTok.span, severity: 'warn', message: `#define ${nameTok.text} has no replacement — ignored` });
+      } else {
+        const replacementText = joinTokenTexts(replacementTokens);
+        macros[nameTok.text] = replacementText;
+        const lexedReplacement = lex(replacementText).tokens.filter((t) => t.kind !== 'NEWLINE');
+        macroTokens.set(nameTok.text, lexedReplacement);
+      }
     }
     return { block: { kind: 'Blank', span: lineSpanBounds(line) }, nextIdx: idx + 1 };
   }
@@ -298,12 +339,15 @@ function parseBlockAt(
   // Rule 5: Subtask open.
   const subtaskMatch = matchSubtaskOpen(content);
   if (subtaskMatch) {
-    const title = joinTokenTexts(subtaskMatch.titleTokens);
-    const { children, nextIdx } = parseChildren(lines, idx + 1, macros, macroTokens, diagnostics, false);
+    const title = joinTokenTexts(expandMacros(subtaskMatch.titleTokens, macroTokens));
+    const { children, nextIdx, closed } = parseChildren(lines, idx + 1, macros, macroTokens, diagnostics, false);
     const endLine = lines[Math.min(nextIdx, lines.length) - 1] ?? line;
     const span = combineSpans(lineSpanBounds(line), lineSpanBounds(endLine));
-    // Rule 10 only specifies a diagnostic for unclosed *scopes*; an unclosed
-    // Subtask is returned (per rule 10's "blocks still returned") without one.
+    // Consistent with unclosed scopes/claims: an unclosed Subtask is still
+    // returned (per rule 10's "blocks still returned") but now also flagged.
+    if (!closed) {
+      diagnostics.push({ span: lineSpanBounds(line), severity: 'info', message: 'unclosed subtask' });
+    }
     const block: Block = { kind: 'Subtask', depth: subtaskMatch.depth, title, children, span };
     return { block, nextIdx };
   }
@@ -312,9 +356,13 @@ function parseBlockAt(
   const claimMatch = matchClaimOpen(content);
   if (claimMatch) {
     const tokens = expandMacros(claimMatch.statementTokens, macroTokens);
-    const { children, nextIdx } = parseChildren(lines, idx + 1, macros, macroTokens, diagnostics, false);
+    const { children, nextIdx, closed } = parseChildren(lines, idx + 1, macros, macroTokens, diagnostics, false);
     const endLine = lines[Math.min(nextIdx, lines.length) - 1] ?? line;
     const span = combineSpans(lineSpanBounds(line), lineSpanBounds(endLine));
+    // Consistent with unclosed scopes/subtasks: flag an unclosed Claim too.
+    if (!closed) {
+      diagnostics.push({ span: lineSpanBounds(line), severity: 'info', message: 'unclosed claim' });
+    }
     const block: Block & StatementTokens = { kind: 'Claim', statement: [], children, span, tokens };
     return { block, nextIdx };
   }

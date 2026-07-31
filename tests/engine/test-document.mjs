@@ -161,6 +161,53 @@ Problem 3 {
   check('Bernoulli', 'every diagnostic has severity info or warn', diagnostics.every((d) => d.severity === 'info' || d.severity === 'warn'));
   check('Bernoulli', 'no "unclosed scope" diagnostics leaked (document is fully balanced)', !diagnostics.some((d) => d.message.startsWith('unclosed scope')));
   check('Bernoulli', 'no "unmatched }" diagnostics leaked (document is fully balanced)', !diagnostics.some((d) => d.message.startsWith('unmatched }')));
+
+  // (5a) Span assertions: expected line numbers are computed from the
+  // BERNOULLI constant itself (not hardcoded), so this stays correct if the
+  // fixture text above is ever edited.
+  const bernoulliLines = BERNOULLI.split('\n');
+  const findLine = (needle, fromLine = 1) => {
+    for (let i = fromLine - 1; i < bernoulliLines.length; i++) {
+      if (bernoulliLines[i].includes(needle)) return i + 1; // 1-based
+    }
+    return -1;
+  };
+  const problemOpenLine = findLine('Problem 3 {');
+  const problemCloseLine = bernoulliLines.length; // Problem is the outermost block; its close is the doc's last line
+  const theoremOpenLine = findLine('Theorem Bernoulli inequality {');
+  const theoremCloseLine = findLine('}', theoremOpenLine + 1); // first bare-close after the theorem opens
+  check(
+    'Bernoulli',
+    'fixture line lookups all resolved (span assertions below are self-computed, not hardcoded)',
+    problemOpenLine !== -1 && theoremOpenLine !== -1 && theoremCloseLine !== -1,
+  );
+  check(
+    'Bernoulli',
+    `Problem scope span covers the full block (its own line through the doc's closing brace): lines ${problemOpenLine}-${problemCloseLine}`,
+    !!problem.span && problem.span.startLine === problemOpenLine && problem.span.endLine === problemCloseLine,
+  );
+  check(
+    'Bernoulli',
+    `Theorem scope span covers exactly its own 3 lines: ${theoremOpenLine}-${theoremCloseLine}`,
+    !!theorem.span && theorem.span.startLine === theoremOpenLine && theorem.span.endLine === theoremCloseLine && theoremCloseLine - theoremOpenLine + 1 === 3,
+  );
+
+  // (5b) Macro span preservation: the macro-expanded WORD:Math / OP:. /
+  // WORD:naturals tokens must carry the ORIGINAL (usage-site) WORD:N
+  // token's span, not the #define line's own N, and not a synthetic/zero
+  // span - so caret lookup through a macro invocation still resolves to the
+  // real source location where the macro was USED.
+  const rawTokens = lex(BERNOULLI).tokens;
+  const usageNIdx = rawTokens.findIndex(
+    (t, i) => t.kind === 'WORD' && t.text === 'N' && rawTokens[i - 1] && rawTokens[i - 1].kind === 'WORD' && rawTokens[i - 1].text === 'in',
+  );
+  const rawNTok = rawTokens[usageNIdx];
+  check('Bernoulli', 'raw (pre-expansion) token stream has a usage-site WORD:N ("...in N:...") to compare spans against', !!rawNTok);
+  const sameSpan = (a, b) => !!a && !!b && a.startLine === b.startLine && a.startCol === b.startCol && a.endLine === b.endLine && a.endCol === b.endCol;
+  const [mathTok, dotTok, naturalsTok] = (theoremStmt.tokens || []).slice(macroExpandedAt, macroExpandedAt + 3);
+  check('Bernoulli', 'macro-expanded WORD:Math token carries the original usage-site WORD:N span', sameSpan(mathTok && mathTok.span, rawNTok && rawNTok.span));
+  check('Bernoulli', 'macro-expanded OP:. token carries the original usage-site WORD:N span', sameSpan(dotTok && dotTok.span, rawNTok && rawNTok.span));
+  check('Bernoulli', 'macro-expanded WORD:naturals token carries the original usage-site WORD:N span', sameSpan(naturalsTok && naturalsTok.span, rawNTok && rawNTok.span));
 }
 
 // ============================================
@@ -323,6 +370,62 @@ Problem 3 {
     'ScopeCaseInsensitive',
     'lowercase "theorem" still matches the Theorem scope',
     ast.blocks.length === 1 && ast.blocks[0].kind === 'Scope' && ast.blocks[0].scopeType === 'Theorem' && ast.blocks[0].title === 'Foo',
+  );
+}
+
+// ============================================
+// Review-fix coverage: empty #define must not register/erase a macro;
+// matrix(...) multiline merge inserts NO synthetic ';' (unlike cases{});
+// scope-title dot cleanup is targeted to MATH_PACKAGE names only.
+// ============================================
+
+// (5c) `A = bmatrix([[1, 2],\n[3, 4]])` merges to ONE Statement, and unlike
+// cases{} merge, NO synthetic ';' is ever inserted for a matrix trigger.
+{
+  const src = 'A = bmatrix([[1, 2],\n[3, 4]])';
+  const { ast } = parse(src);
+  check('MatrixMultiline', 'produces exactly one top-level Statement block', ast.blocks.length === 1 && ast.blocks[0].kind === 'Statement');
+  const stmt = ast.blocks[0] || {};
+  const texts = tseq(stmt.tokens || []);
+  check('MatrixMultiline', 'no synthetic ; inserted (only cases{} gets one, not matrix(...))', !texts.includes('OP:;'));
+  check(
+    'MatrixMultiline',
+    'tokens are the two lines concatenated verbatim: starts WORD:A, includes WORD:bmatrix, ends RPAREN:)',
+    texts[0] === 'WORD:A' && texts.includes('WORD:bmatrix') && texts[texts.length - 1] === 'RPAREN:)',
+  );
+}
+
+// (5d) `#define N` (empty replacement) must NOT register a macro - a later
+// bare `N` must pass through untouched, with exactly one warn diagnostic.
+{
+  const { ast, diagnostics } = parse('#define N\nN + 1');
+  check(
+    'EmptyDefine',
+    'blocks are exactly [Blank (the #define line), Statement (N + 1)]',
+    ast.blocks.length === 2 && ast.blocks[0].kind === 'Blank' && ast.blocks[1].kind === 'Statement',
+  );
+  const stmt = ast.blocks[1] || {};
+  const texts = tseq(stmt.tokens || []);
+  check('EmptyDefine', 'statement still contains WORD:N (macro NOT registered, nothing erased)', texts.includes('WORD:N'));
+  check('EmptyDefine', 'macros table does NOT contain N', !Object.prototype.hasOwnProperty.call(ast.macros, 'N'));
+  const warnDiags = diagnostics.filter((d) => d.severity === 'warn');
+  check('EmptyDefine', 'exactly 1 warn diagnostic', warnDiags.length === 1);
+  check(
+    'EmptyDefine',
+    'diagnostic message is "#define N has no replacement — ignored"',
+    warnDiags[0] && warnDiags[0].message === '#define N has no replacement — ignored',
+  );
+}
+
+// (5e) `Problem 1. Basics {` -> title "1. Basics": an ordinary sentence
+// period keeps its trailing space (only a MATH_PACKAGE name like
+// `Math.naturals` collapses the space around the dot).
+{
+  const { ast } = parse('Problem 1. Basics {');
+  check(
+    'ScopeTitlePeriod',
+    'Scope(Problem) title is "1. Basics" (sentence period keeps its space, unlike a MATH_PACKAGE name)',
+    ast.blocks.length === 1 && ast.blocks[0].kind === 'Scope' && ast.blocks[0].title === '1. Basics',
   );
 }
 
