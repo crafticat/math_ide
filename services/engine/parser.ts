@@ -241,11 +241,13 @@ class Parser {
         // only one found BEFORE the search crosses a top-level relation/logic
         // token (findPartnerBar stops at anything infixOf() places at or
         // below BP.REL: = != < > <= >= => <=> and/or/AND/OR iff implies in
-        // notin subset congruent similar parallel perp corresponds). `2|x|`,
-        // `|x||y|`, `f(x)|g(x)|` are products with an absolute value - the
-        // reading the old "always mid" rule got wrong - while `n | m`,
-        // `{x : a | x}`, `p | a AND p | b` and `d | n AND |S| = 3` all stay
-        // "divides", because their AND (or other boundary) now stops the
+        // notin subset congruent similar parallel perp corresponds) or a
+        // clause boundary (isClauseBoundary: closers, seq connectors ',' ';'
+        // ':' '.', or a quantifier word). `2|x|`, `|x||y|`, `f(x)|g(x)|` are
+        // products with an absolute value - the reading the old "always mid"
+        // rule got wrong - while `n | m`, `{x : a | x}`, `p | a AND p | b`,
+        // `d | n AND |S| = 3` and `d | n, |S| = 3` all stay "divides",
+        // because their AND (or comma, or other boundary) now stops the
         // search before it can reach an unrelated bar from a later clause.
         // The remaining cost: a CHAIN of divides sharing one clause with no
         // boundary between them (`a | b | c`) still reads as `a` times `|b|`
@@ -257,6 +259,11 @@ class Parser {
           left = this.binop('mid', left, right);
           continue;
         }
+        // A '/'-operand's product stops at a differential (see the fracOperand
+        // guard down at the MUL-level juxt branch); a juxtaposed Abs must not
+        // glue onto one either, or `d/dx |x|` would read as `d / (dx |x|)`
+        // instead of `(d/dx) |x|`. Mirrors that guard.
+        if (opts.fracOperand && endsWithDifferential(left)) break;
         if (BP.MUL < minBp) break;
         // Re-enter at the factor level so parseAtom sees the '|' in prefix
         // position (-> parseAbs) and any script binds to the Abs: `2|x|^2`.
@@ -528,6 +535,14 @@ class Parser {
       if (close < 0) return this.rawTail(start);
       const arrow = this.findTop(k + 1, close, (t) => this.isOp(t, '->'));
       if (arrow >= 0) {
+        // NOTE (judgment call): an empty bound (`sum( -> n)`, `sum(i=1 -> )`)
+        // parses to a silent Raw("") - parseRange's from>=to case builds the
+        // Raw directly rather than through raw(), which is the one that warns.
+        // That silence is INTENTIONAL, not an oversight: this is a live-typing
+        // editor, and a bound sits empty for a moment on every keystroke while
+        // it's mid-edit (e.g. `sum(i= -> n)` before the lower limit is typed).
+        // A diagnostic here would fire constantly for a completely normal
+        // typing state rather than flagging a real error.
         const from = this.parseRange(k + 1, arrow);
         const to = this.parseRange(arrow + 1, close);
         this.pos = close + 1;
@@ -710,8 +725,16 @@ class Parser {
   }
 
   private isResync(t: Token): boolean {
+    return this.isClauseBoundary(t);
+  }
+
+  // A token that ends the current clause: a closing bracket, a seq connector
+  // (',' ';' ':' '.'), or a quantifier word (forall/exists/suchthat) starting
+  // the next one. Shared by isResync's error-recovery scan and
+  // findPartnerBar's bar-partner lookahead below - in both cases, crossing
+  // one of these means whatever comes next belongs to a different clause.
+  private isClauseBoundary(t: Token): boolean {
     if (CLOSERS.has(t.kind)) return true;
-    if (t.kind === 'OP' && (t.text === ',' || t.text === ';')) return true;
     if (t.kind === 'OP' && SEQ_CONNECTORS.has(t.text)) return true;
     return t.kind === 'WORD' && QUANTIFIERS.has(t.text);
   }
@@ -784,9 +807,11 @@ class Parser {
   }
 
   // Like findTop for a bare '|', but the search gives up the moment it
-  // crosses a top-level relation/logic token instead of scanning to `to`: a
-  // '|' beyond that boundary opens (or closes) an Abs in a DIFFERENT clause,
-  // so it is never this bar's partner (see the NOTE at the '|' call site).
+  // crosses a top-level relation/logic token, or a clause boundary (seq
+  // connector / quantifier - see isClauseBoundary), instead of scanning to
+  // `to`: a '|' beyond that point opens (or closes) an Abs in a DIFFERENT
+  // clause, so it is never this bar's partner (see the NOTE at the '|' call
+  // site).
   private findPartnerBar(from: number, to: number): number {
     let depth = 0;
     for (let i = from; i < to; i++) {
@@ -795,6 +820,7 @@ class Parser {
       if (CLOSERS.has(t.kind)) { depth = Math.max(0, depth - 1); continue; }
       if (depth > 0) continue;
       if (this.isOp(t, '|')) return i;
+      if (this.isClauseBoundary(t)) return -1;
       const inf = this.infixOf(t);
       if (inf && inf.bp <= BP.REL) return -1;
     }

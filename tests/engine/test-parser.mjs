@@ -92,10 +92,10 @@ function shape(e) {
   }
 }
 
-// Every Expr node in the tree, parents before children.
-function walk(e, out = []) {
-  if (!e || typeof e !== 'object') return out;
-  out.push(e);
+// Direct (one level) children of a node, in traversal order. Shared by
+// walk() (recurses through every descendant) and checkNesting() (checks only
+// the immediate ones, recursing itself).
+function directChildren(e) {
   const kids = [];
   for (const key of ['left', 'right', 'operand', 'num', 'den', 'base', 'exp', 'sub', 'element', 'condition', 'from', 'to']) {
     if (e[key]) kids.push(e[key]);
@@ -105,7 +105,14 @@ function walk(e, out = []) {
   }
   if (Array.isArray(e.rows)) for (const row of e.rows) kids.push(...row);
   if (Array.isArray(e.branches)) for (const b of e.branches) { if (b.value) kids.push(b.value); if (b.condition) kids.push(b.condition); }
-  for (const k of kids) walk(k, out);
+  return kids;
+}
+
+// Every Expr node in the tree, parents before children.
+function walk(e, out = []) {
+  if (!e || typeof e !== 'object') return out;
+  out.push(e);
+  for (const k of directChildren(e)) walk(k, out);
   return out;
 }
 
@@ -247,18 +254,10 @@ for (const c of CASES) {
 // Child spans must nest inside their parent's span.
 function checkNesting(e, path = 'root') {
   let ok = true;
-  const kids = walk(e).slice(1);
-  // shallow (direct children only) check via a targeted re-walk
-  const direct = [];
-  for (const key of ['left', 'right', 'operand', 'num', 'den', 'base', 'exp', 'sub', 'element', 'condition', 'from', 'to']) if (e[key]) direct.push(e[key]);
-  for (const key of ['args', 'elements', 'operands']) if (Array.isArray(e[key])) direct.push(...e[key]);
-  if (Array.isArray(e.rows)) for (const row of e.rows) direct.push(...row);
-  if (Array.isArray(e.branches)) for (const b of e.branches) { if (b.value) direct.push(b.value); if (b.condition) direct.push(b.condition); }
-  for (const kid of direct) {
+  for (const kid of directChildren(e)) {
     if (!spanContains(e.span, kid.span)) { ok = false; break; }
     if (!checkNesting(kid, path)) { ok = false; break; }
   }
-  void kids;
   return ok;
 }
 for (const c of CASES) {
@@ -370,6 +369,11 @@ const EXTRA = [
   // function after it is not part of the denominator's product.
   ['d/dx f(x)', 'BinOp(juxt,Frac(Var(d),Sym(dx)),Call(f,[Var(x)]))'],
   ['dy/dx', 'Frac(Sym(dy),Sym(dx))'],
+  // The juxt-Abs path is a factor of the SAME product, so it must respect the
+  // fraction operand's differential termination exactly like plain juxt does:
+  // `d/dx |x|` is `(d/dx) |x|`, not `d / (dx |x|)` with the Abs glued into
+  // the denominator.
+  ['d/dx |x|', 'BinOp(juxt,Frac(Var(d),Sym(dx)),Abs(Var(x)))'],
   // Scripts: '_' and '^' are siblings at bp 60, so neither may be swallowed by
   // the OTHER's argument; same-operator chains stay right-assoc.
   ['a_i^2', 'Pow(Sub(Var(a),Var(i)),Num(2))'],
@@ -395,6 +399,20 @@ const EXTRA = [
   ['p | a AND p | b', 'BinOp(land,BinOp(mid,Var(p),Var(a)),BinOp(mid,Var(p),Var(b)))'],
   ['{ d : d | n AND d | m }', 'SetBuilder(Var(d),BinOp(land,BinOp(mid,Var(d),Var(n)),BinOp(mid,Var(d),Var(m))))'],
   ['d | n AND |S| = 3', 'BinOp(land,BinOp(mid,Var(d),Var(n)),Relation([=],[Abs(Var(S)),Num(3)]))'],
+  // The boundary rule isn't just for AND: the OTHER clause connectors that
+  // share bp 3 (seq connectors ',' ';' ':' '.' and quantifier words) must
+  // stop the partner-bar search too, or a later clause's '|' gets misread as
+  // THIS bar's partner. `d | n, |S| = 3` used to glue everything from `n`
+  // onward into one (unclosed) Abs; it must stay two clauses, `d | n` divides.
+  ['d | n, |S| = 3',
+    'BinOp(seq,BinOp(seq,BinOp(mid,Var(d),Var(n)),Sym(,)),Relation([=],[Abs(Var(S)),Num(3)]))'],
+  // Same bug via a quantifier boundary instead of a comma: `suchthat` must
+  // stop the lookahead so `p | q` stays "divides" and `|S| = 1` is its own
+  // clause, not swallowed into `p`'s Abs.
+  ['p | q suchthat |S| = 1',
+    'BinOp(seq,BinOp(mid,Var(p),Var(q)),BinOp(juxt,Sym(suchthat),Relation([=],[Abs(Var(S)),Num(1)])))'],
+  // documented tradeoff: bar chains read as juxt-Abs — see parser.ts findPartnerBar NOTE
+  ['a | b | c', 'BinOp(juxt,BinOp(juxt,Var(a),Abs(Var(b))),Var(c))'],
   // The real quantifier line from INITIAL_CONTENT.
   ['exists del > 0 suchthat |f(t) - f(x)| < eps forall t in (x - del, x + del)',
     'BinOp(seq,BinOp(seq,BinOp(juxt,Sym(exists),Relation([>],[Ident(del),Num(0)])),' +
