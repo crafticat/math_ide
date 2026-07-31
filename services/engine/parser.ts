@@ -237,13 +237,20 @@ class Parser {
       // 30, else "divides" at level 12
       if (t.kind === 'OP' && t.text === '|') {
         if (this.absDepth > 0) break; // the Abs sub-parser owns this token
-        // NOTE (judgment call): with no Abs open, a partner bar later in this
-        // range decides. `2|x|`, `|x||y|`, `f(x)|g(x)|` are products with an
-        // absolute value - the reading the old "always mid" rule got wrong -
-        // and `{x : a | x}` / `n | m` are still "divides". The cost is that a
-        // CHAIN of divides (`a | b | c`) now reads as `a` times `|b|` then `c`;
-        // repeated divides in one run are the rarer input by far.
-        if (this.findTop(this.pos + 1, this.end, (p) => this.isOp(p, '|')) < 0) {
+        // NOTE (judgment call): with no Abs open, a partner bar decides - but
+        // only one found BEFORE the search crosses a top-level relation/logic
+        // token (findPartnerBar stops at anything infixOf() places at or
+        // below BP.REL: = != < > <= >= => <=> and/or/AND/OR iff implies in
+        // notin subset congruent similar parallel perp corresponds). `2|x|`,
+        // `|x||y|`, `f(x)|g(x)|` are products with an absolute value - the
+        // reading the old "always mid" rule got wrong - while `n | m`,
+        // `{x : a | x}`, `p | a AND p | b` and `d | n AND |S| = 3` all stay
+        // "divides", because their AND (or other boundary) now stops the
+        // search before it can reach an unrelated bar from a later clause.
+        // The remaining cost: a CHAIN of divides sharing one clause with no
+        // boundary between them (`a | b | c`) still reads as `a` times `|b|`
+        // then `c`.
+        if (this.findPartnerBar(this.pos + 1, this.end) < 0) {
           if (BP.ARROW < minBp) break;
           this.pos++;
           const right = this.parseBinary(BP.ARROW + 1);
@@ -774,6 +781,24 @@ class Parser {
   private findTop(from: number, to: number, pred: (t: Token) => boolean): number {
     const hits = this.findAllTop(from, to, pred, true);
     return hits.length ? hits[0] : -1;
+  }
+
+  // Like findTop for a bare '|', but the search gives up the moment it
+  // crosses a top-level relation/logic token instead of scanning to `to`: a
+  // '|' beyond that boundary opens (or closes) an Abs in a DIFFERENT clause,
+  // so it is never this bar's partner (see the NOTE at the '|' call site).
+  private findPartnerBar(from: number, to: number): number {
+    let depth = 0;
+    for (let i = from; i < to; i++) {
+      const t = this.toks[i];
+      if (OPENERS[t.kind]) { depth++; continue; }
+      if (CLOSERS.has(t.kind)) { depth = Math.max(0, depth - 1); continue; }
+      if (depth > 0) continue;
+      if (this.isOp(t, '|')) return i;
+      const inf = this.infixOf(t);
+      if (inf && inf.bp <= BP.REL) return -1;
+    }
+    return -1;
   }
 
   private findAllTop(from: number, to: number, pred: (t: Token) => boolean, firstOnly = false): number[] {

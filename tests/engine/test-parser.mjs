@@ -389,6 +389,12 @@ const EXTRA = [
   ['2|x|^2', 'BinOp(juxt,Num(2),Pow(Abs(Var(x)),Num(2)))'],
   ['n | m', 'BinOp(mid,Var(n),Var(m))'],
   ['{ x : a | x }', 'SetBuilder(Var(x),BinOp(mid,Var(a),Var(x)))'],
+  // The partner-bar lookahead must stop at a top-level relation/logic token:
+  // a later '|' across an AND (or any such boundary) belongs to a different
+  // clause and is never this bar's partner, so both sides stay "divides".
+  ['p | a AND p | b', 'BinOp(land,BinOp(mid,Var(p),Var(a)),BinOp(mid,Var(p),Var(b)))'],
+  ['{ d : d | n AND d | m }', 'SetBuilder(Var(d),BinOp(land,BinOp(mid,Var(d),Var(n)),BinOp(mid,Var(d),Var(m))))'],
+  ['d | n AND |S| = 3', 'BinOp(land,BinOp(mid,Var(d),Var(n)),Relation([=],[Abs(Var(S)),Num(3)]))'],
   // The real quantifier line from INITIAL_CONTENT.
   ['exists del > 0 suchthat |f(t) - f(x)| < eps forall t in (x - del, x + del)',
     'BinOp(seq,BinOp(seq,BinOp(juxt,Sym(exists),Relation([>],[Ident(del),Num(0)])),' +
