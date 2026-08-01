@@ -157,6 +157,28 @@ const CASES = [
   // (`a real number`) is the English article - one map cannot say both.
   ['Let a be a real number',
     [['Let', 'prose'], ['a', 'math'], ['be', 'prose'], ['a', 'prose'], ['real', 'prose'], ['number', 'prose']]],
+
+  // Fix A: a statement-INITIAL discourse marker (then/so/hence/thus/therefore/
+  // assume/suppose/note/recall/consider/clearly/since/because) must not poison
+  // hasProse for the WHOLE sentence - only the marker itself reads as prose,
+  // not everything after it.
+  ['Then p and q => r or not s',
+    { Then: 'prose', p: 'math', and: 'math', q: 'math', r: 'math', or: 'math', not: 'math', s: 'math' }],
+  ['Assume x in A and y in B => x + y in A union B',
+    { Assume: 'prose', x: 'math', in: 'math', A: 'math', and: 'math', y: 'math', union: 'math' }],
+  // ...but the marker is not a magic escape hatch: if the REST of the
+  // sentence still reads as English, and/or/not stay prose.
+  ['Hence a and b are nonzero',
+    { Hence: 'prose', a: 'math', and: 'prose', b: 'math', are: 'prose', nonzero: 'prose' }],
+
+  // Fix B: the articleA veto used to fire for ANY binder ("Suppose a
+  // sequence" wrongly read `a` as a variable just because a binder came
+  // before it). It now only vetoes when the word AFTER `a` is an
+  // auxiliary/copula verb ("Let a be...") - a plain noun after a binder is
+  // still the English article, binder or not.
+  ['Suppose a sequence converges', { Suppose: 'prose', a: 'prose', sequence: 'prose', converges: 'prose' }],
+  ['Find a real number x', { Find: 'prose', a: 'prose', real: 'prose', number: 'prose', x: 'math' }],
+  ['Show a counterexample', { Show: 'prose', a: 'prose', counterexample: 'prose' }],
 ];
 
 const results = new Map();
@@ -218,6 +240,15 @@ for (const [src, wantKinds] of [
   const { runs } = results.get('Show that f and g are continuous on [0,1]');
   check('Runs', '"Show that f and g are continuous on [0,1]" - trailing interval is its own math run',
     kindsOf(runs).join(' ') === 'prose math prose math prose math' && textOf(runs[runs.length - 1]) === '[ 0 , 1 ]',
+    runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
+}
+{
+  // Fix A at the run level: the statement-initial discourse marker "Then" is
+  // its own prose run, and everything after it collapses into ONE math run -
+  // the marker must not shatter the formula into alternating prose/math.
+  const { runs } = results.get('Then p and q => r or not s');
+  check('Runs', '"Then p and q => r or not s" - prose opener, then a single math run (discourse marker does not poison the sentence frame)',
+    kindsOf(runs).join(' ') === 'prose math' && textOf(runs[1]) === 'p and q => r or not s',
     runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
 }
 

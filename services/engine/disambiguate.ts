@@ -36,9 +36,17 @@ type Verdict = 'prose' | 'math';
 type StaticClass = Verdict | 'ambiguous';
 
 // ---- The single tunable table ----
+// Every name `fire()` is ever called with, spelled out so a typo'd feature
+// name is a compile error instead of a silent `undefined` weight.
+type Feature =
+  | 'singleLetter' | 'indexedVar' | 'bareKeyword' | 'unknownMultiChar'
+  | 'neighborProse' | 'neighborMathy' | 'commaBefore' | 'quantifierContext'
+  | 'articleA' | 'binderBefore' | 'inMembership' | 'inProse'
+  | 'proseSentence' | 'formulaSentence';
+
 // Positive pulls toward math, negative toward prose. Retuning the classifier
 // means editing these numbers and nothing else.
-export const WEIGHTS: { [feature: string]: number } = {
+export const WEIGHTS: Record<Feature, number> = {
   singleLetter: 5,        // `x`, `f`, `L` - the canonical variable shape, and strong
                           //   enough to survive English on BOTH sides ("f is continuous")
   indexedVar: 5,          // `x1`, `a2` - a letter with a digit tail is still a variable
@@ -79,6 +87,25 @@ const CONNECTIVES = new Set(['and', 'or', 'not']);
 const BINDERS = new Set([
   'let', 'assume', 'suppose', 'define', 'denote', 'consider', 'take', 'fix', 'given',
   'show', 'prove', 'find', 'determine', 'solve', 'compute', 'calculate', 'verify',
+]);
+
+// Statement-initial glue words ("Then p and q => r", "Assume x in A ...").
+// These read as English on their own, but unlike a real English lead-in they
+// say nothing about whether the REST of the sentence is prose - so they must
+// not be allowed to poison hasProse for the whole statement (see buildContext).
+// Only the first word-token of a statement is ever checked against this set.
+const DISCOURSE_MARKERS = new Set([
+  'then', 'so', 'hence', 'thus', 'therefore', 'assume', 'suppose', 'note', 'recall', 'consider', 'clearly', 'since', 'because',
+]);
+
+// Auxiliary/copula verbs. When one of these follows `a`/`A`, the word is being
+// predicated ("Let a BE a real number") rather than modifying a noun, so the
+// articleA override below must not fire - this is what separates "Let a be a
+// real number" (first `a`: variable) from "Suppose a sequence converges" /
+// "Find a real number x" (both: `a` is the English article, binder or not).
+const AUX_VERBS = new Set([
+  'be', 'is', 'are', 'was', 'were', 'has', 'have', 'had', 'does', 'do',
+  'can', 'could', 'will', 'would', 'may', 'might', 'must', 'shall', 'should',
 ]);
 
 // OP texts that read as mathematics when they sit next to an ambiguous word.
@@ -203,7 +230,16 @@ function buildContext(tokens: Token[]): Context {
   }
 
   const classes = tokens.map((_, i) => staticClassOf(tokens, i, inCallArgs));
-  const hasProse = tokens.some((t, i) => t.kind === 'WORD' && classes[i] === 'prose');
+  // A statement-INITIAL discourse marker ("Then p and q => r") does not count
+  // as the sentence's own prose evidence - only the very first word-token is
+  // ever exempt, so "Hence a and b are nonzero" still reads as prose (the
+  // "are nonzero" tail earns that verdict on its own).
+  const firstWordIndex = tokens.findIndex((t) => t.kind === 'WORD');
+  const hasProse = tokens.some((t, i) => {
+    if (t.kind !== 'WORD' || classes[i] !== 'prose') return false;
+    if (i === firstWordIndex && DISCOURSE_MARKERS.has(t.text.toLowerCase())) return false;
+    return true;
+  });
   const hasQuantifier = tokens.some((t) =>
     (t.kind === 'WORD' && QUANTIFIER_WORDS.has(t.text)) || (t.kind === 'OP' && QUANTIFIER_OPS.has(t.text)));
   return { tokens, classes, inCallArgs, matchingParen, hasProse, hasQuantifier };
@@ -249,7 +285,7 @@ function scoreWord(ctx: Context, i: number): { score: number; reasons: string[] 
   const w = tokens[i].text;
   const reasons: string[] = [];
   let score = 0;
-  const fire = (feature: string, side?: 'left' | 'right') => {
+  const fire = (feature: Feature, side?: 'left' | 'right') => {
     const weight = WEIGHTS[feature];
     score += weight;
     reasons.push(`${feature}${side ? `-${side}` : ''}(${weight > 0 ? '+' : ''}${weight})`);
@@ -295,7 +331,12 @@ function scoreWord(ctx: Context, i: number): { score: number; reasons: string[] 
 
   if (w === 'a' || w === 'A') {
     // The English article: `a` + an English word. Two things veto it:
-    //  - a binder ("Let a be ...": `a` is being introduced, not modifying a noun);
+    //  - the NEXT word is an auxiliary/copula verb ("Let a BE ...": `a` is
+    //    being introduced/predicated, not modifying the word after it) - a
+    //    binder immediately before `a` is NOT by itself veto-worthy, only
+    //    what comes after `a` is, which is what separates "Let a be a real
+    //    number" (first `a`: variable) from "Suppose a sequence converges" /
+    //    "Find a real number x" (both: still the English article);
     //  - a math phrase that ENDS right after ("a divides b" is `a | b`), where
     //    "ends" means the mathy token is last or is not itself followed by
     //    English - which is what separates `a divides b` (variable) from
@@ -305,7 +346,8 @@ function scoreWord(ctx: Context, i: number): { score: number; reasons: string[] 
     const beyond = tokens[i + 3];
     const nextIsNoun = !!next && next.kind === 'WORD' && next.text.length > 1 && classes[i + 1] === 'prose';
     const endsInMath = !!after && isMathyToken(after, classes[i + 2]) && !(beyond && isProsyToken(beyond, classes[i + 3]));
-    if (nextIsNoun && !endsInMath && !binderBefore) fire('articleA');
+    const nextIsAuxVerb = !!next && next.kind === 'WORD' && AUX_VERBS.has(next.text.toLowerCase());
+    if (nextIsNoun && !endsInMath && !nextIsAuxVerb) fire('articleA');
   }
 
   if (w === 'in') {
