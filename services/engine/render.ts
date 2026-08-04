@@ -10,15 +10,19 @@
 // Three entry points, one per level of the document:
 //   renderExpr(expr, highlight?)                      - one expression
 //   renderStatement(tokens, indent, diags, highlight?) - one source line
-//   renderDocument(ast, diags)                        - the whole document
+//   renderDocument(ast, diags, parsed?)               - the whole document
 //
 // renderStatement is a thin composition of two lower-level exports:
 // parseStatement (segment + parse each math run ONCE) and renderSegments
 // (render only - adds no diagnostics). They are split out, and renderDocument
-// is built on top of them rather than on renderStatement directly, so a
-// future engine.ts can capture the parsed Expr trees per statement (for
-// caret->node lookup) without paying for a second parse or duplicating every
-// diagnostic the first one already emitted.
+// is built on top of them rather than on renderStatement directly, so
+// engine.ts can capture the parsed Expr trees per statement (for caret->node
+// lookup) without paying for a second parse or duplicating every diagnostic
+// the first one already emitted: it hands its own Block -> ParsedSegment[]
+// map back in as renderDocument's optional `parsed` argument, and the map's
+// entries are used instead of re-parsing. Callers that have no such map
+// (the tests, any direct user of the renderer) simply omit it and get the
+// parse-as-you-go behaviour.
 //
 // ---- The spacing model (the part that is easy to get subtly wrong) ----
 //
@@ -151,7 +155,12 @@ function cat(a: string, b: string): string {
 
 // ================= structural predicates =================
 
-function childrenOf(e: Expr): Expr[] {
+/** Every sub-expression of `e`, in source order. A pure structural walk with
+ *  no output policy in it - exported because engine.ts's nodeAt() descends
+ *  the same trees looking for the node under the caret, and a second copy of
+ *  this switch would be one more place to forget a node kind (the
+ *  `_exhaustive: never` guard below makes the compiler catch that here). */
+export function childrenOf(e: Expr): Expr[] {
   switch (e.kind) {
     case 'BinOp': return [e.left, e.right];
     case 'UnaryOp': return [e.operand];
@@ -611,6 +620,27 @@ export function renderSegments(segments: ParsedSegment[], indent: number, highli
 }
 
 /**
+ * The LaTeX of one Statement/Claim block's line, given its already-parsed
+ * segments: the ONE place that decides a claim carries the italic "Claim: "
+ * label and that a plain statement is indented by its depth. renderDocument
+ * emits every such line through here, and so does engine.ts's
+ * renderLineWithHighlight - so re-rendering a single line with a highlight
+ * yields a string byte-identical to the compiled one apart from the
+ * \htmlClass wrapper, instead of quietly dropping the label or the indent.
+ */
+export function renderStatementLine(
+  blockKind: 'Statement' | 'Claim',
+  segments: ParsedSegment[],
+  depth: number,
+  highlight?: HighlightSpec,
+): string {
+  return blockKind === 'Claim'
+    // The label owns the indentation, so the statement itself renders at 0.
+    ? `${quads(depth)}\\textit{\\text{Claim: }}${renderSegments(segments, 0, highlight)}`
+    : renderSegments(segments, depth, highlight);
+}
+
+/**
  * Renders one statement (a single source line's tokens) to LaTeX, prefixed by
  * `indent` \quad's. Thin composition of parseStatement + renderSegments -
  * the one-call convenience API for callers (like renderDocument's Claim/
@@ -656,10 +686,27 @@ function letter(n: number): string {
  * Walks the document AST and produces one EngineLine per visible line, in
  * document order: scope headers (with their spacers), subtask labels, claim
  * labels, statements. Blank blocks produce nothing.
+ *
+ * `parsed` (optional) is a caller-supplied Block -> ParsedSegment[] map for
+ * Statement/Claim blocks that the caller ALREADY ran parseStatement over -
+ * see the file header. Blocks missing from it (or all of them, when it is
+ * omitted) are parsed here as before. It is keyed by block object identity,
+ * so the caller must build it by walking the very same `ast` it passes in.
  */
-export function renderDocument(ast: DocumentAst, diagnostics: Diagnostic[]): EngineLine[] {
+export function renderDocument(
+  ast: DocumentAst,
+  diagnostics: Diagnostic[],
+  parsed?: Map<Block, ParsedSegment[]>,
+): EngineLine[] {
   const out: EngineLine[] = [];
   const used = new Set<string>();
+
+  // The block's pre-parsed segments if the caller supplied them, else a fresh
+  // parse (which is where this statement's parse/segment diagnostics come
+  // from - a pre-parsed block already emitted them into the caller's array
+  // and must NOT emit them twice).
+  const segmentsFor = (block: Block): ParsedSegment[] =>
+    parsed?.get(block) ?? parseStatement((block as Block & StatementTokens).tokens ?? [], diagnostics);
 
   // ids are `line-N` / `spacer-N` for source line N. Two blocks can legally
   // report the same line (e.g. several scopes left unclosed at EOF all end on
@@ -710,22 +757,13 @@ export function renderDocument(ast: DocumentAst, diagnostics: Diagnostic[]): Eng
         }
 
         case 'Claim': {
-          const tokens = (block as Block & StatementTokens).tokens ?? [];
-          // Built via parseStatement + renderSegments (rather than the
-          // renderStatement convenience wrapper) so `segments` sits right
-          // here as the per-statement ParsedSegment[] a future engine.ts can
-          // capture for nodeAt() - see the header.
-          const segments = parseStatement(tokens, diagnostics);
-          push('line', block.span.startLine,
-            `${quads(depth)}\\textit{\\text{Claim: }}${renderSegments(segments, 0)}`);
+          push('line', block.span.startLine, renderStatementLine('Claim', segmentsFor(block), depth));
           walk(block.children, depth + 1);
           break;
         }
 
         case 'Statement': {
-          const tokens = (block as Block & StatementTokens).tokens ?? [];
-          const segments = parseStatement(tokens, diagnostics);
-          push('line', block.span.startLine, renderSegments(segments, depth));
+          push('line', block.span.startLine, renderStatementLine('Statement', segmentsFor(block), depth));
           break;
         }
 
