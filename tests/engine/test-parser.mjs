@@ -332,8 +332,19 @@ const EXTRA = [
   // Atoms
   ['x^(1/n)', 'Pow(Var(x),Frac(Num(1),Var(n)))'],
   ["x''", 'Prime(Var(x),2)'],
+  // postfix '!' is the same node factorial(...) builds, and binds like a prime
+  ['n!', 'Call(factorial,[Var(n)])'],
+  ['(j-1)! + 1', 'BinOp(+,Call(factorial,[Group(BinOp(-,Var(j),Num(1)))]),Num(1))'],
+  ['n!^2', 'Pow(Call(factorial,[Var(n)]),Num(2))'],
+  ['2n!', 'BinOp(juxt,Num(2),Call(factorial,[Var(n)]))'],
+  ['factorial(n)', 'Call(factorial,[Var(n)])'],
   ['hat(x) + vec(y)', 'BinOp(+,Call(hat,[Var(x)]),Call(vec,[Var(y)]))'],
   ['gcd(a, b)', 'Call(gcd,[Var(a),Var(b)])'],
+  // A word that NAMES a symbol is that symbol applied to a group, not a call
+  // named after it - but a word in both tables (sin, det, ...) stays a call.
+  ['phi(x)', 'BinOp(juxt,Sym(phi),Group(Var(x)))'],
+  ['partial(x)', 'BinOp(juxt,Sym(partial),Group(Var(x)))'],
+  ['det(A)', 'Call(det,[Var(A)])'],
   ['QED', 'Sym(QED)'],
   ['Math.foo', 'Ident(Math.foo)'],
   ['velocity', 'Ident(velocity)'],

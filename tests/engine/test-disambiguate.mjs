@@ -330,6 +330,33 @@ for (const [src, wantKinds] of [
   check('Runs', '"choose(n, k) = 10" - real call form is unaffected by the bareKeyword carve-out (single math run)',
     runs.length === 1 && runs[0].kind === 'math', runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
 }
+// Call form by ADJACENCY: an unknown multi-char name written tight against
+// its paren (`Im(f)`, `Aut(G)`) is an application, so it - and its argument
+// list - stay in the math run. Splitting it would strand the bracket (or the
+// `|` pair around it) in a math run of its own, where it can only parse as
+// Raw. The same word with a space before the paren is still a parenthetical.
+{
+  const { runs } = run('|Im(f)| = 1');
+  check('Runs', '"|Im(f)| = 1" - tight unknown name is a call, so the bars stay in one math run',
+    runs.length === 1 && runs[0].kind === 'math', runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
+}
+{
+  const { runs } = run('Aut(G) is a group');
+  check('Runs', '"Aut(G) is a group" - the call is math, the sentence around it is prose',
+    kindsOf(runs).join(' ') === 'math prose' && textOf(runs[0]) === 'Aut ( G )',
+    runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
+}
+{
+  const { runs } = run('the value (see above) is fixed');
+  check('Runs', '"the value (see above) is fixed" - a spaced paren is still a parenthetical remark (single prose run)',
+    runs.length === 1 && runs[0].kind === 'prose', runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
+}
+{
+  const { runs } = run('if(x > 0) then y = 1');
+  check('Runs', '"if(x > 0) then y = 1" - a STOP_WORD is never a call name, however tight the paren',
+    runs[0].kind === 'prose' && textOf(runs[0]) === 'if',
+    runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
+}
 
 // Punctuation attachment: a comma between two prose words stays in the prose
 // run; a comma between numbers stays math; a trailing period follows its

@@ -69,7 +69,15 @@ const isLetterOrDigit = (ch: string | undefined): boolean => isLetter(ch) || isD
 // (longest first) matters.
 const THREE_CHAR_OPS = ['<=>'];
 const TWO_CHAR_OPS = ['=>', '->', '!=', '<=', '>=', '+-', '-+'];
-const SINGLE_CHAR_OPS = new Set(['=', '<', '>', '+', '-', '*', '/', '^', '_', "'", '|', ':', ';', ',', '.']);
+// '!' is in the list for the same reason "'" is: it is a real postfix
+// operator of the language (`(j-1)!`, `5!`), not stray punctuation. '!=' is
+// matched by the two-char class above first, so only a '!' that is NOT part
+// of '!=' reaches here.
+const SINGLE_CHAR_OPS = new Set(['=', '<', '>', '+', '-', '*', '/', '^', '_', "'", '|', ':', ';', ',', '.', '!']);
+
+// Rule 4's one word-splitting shape: `fdotg` -> `f dot g` (see the WORD
+// branch below). Anchored, so only a whole word of exactly this shape splits.
+const GLUED_DOT = /^([A-Za-z])dot([A-Za-z])$/;
 
 const BRACKETS: Partial<Record<string, TokenKind>> = {
   '(': 'LPAREN', ')': 'RPAREN',
@@ -177,12 +185,31 @@ export function lex(source: string): { tokens: Token[]; diagnostics: Diagnostic[
 
     // Rule 4: WORD = [A-Za-z][A-Za-z0-9]* (no underscore - '_' is an OP, so
     // `a_i` lexes as WORD OP WORD).
+    //
+    // One shape is split rather than pushed whole: the glued dot product
+    // `fdotg`, which means exactly what `f dot g` and `f·g` mean. Rule 1
+    // already rewrites `·` to a spaced ` dot ` word, so this is the same
+    // rewrite for the spelling that has no separator to normalize - done
+    // here, on the finished word, because `fdotg` is only one word to the
+    // scanner. The split carves the three spans OUT of the word's own span
+    // (nothing is inserted into the text), so normalized columns - and every
+    // caret mapped through them - are untouched. GLUED_DOT is deliberately
+    // narrow: single letter, `dot`, single letter, the whole word. `dotted`,
+    // `adotbc` and `fdot` are ordinary words.
     if (isLetter(ch)) {
       const startCol = col;
       const start = i;
       advance();
       while (isLetterOrDigit(text[i])) { advance(); }
-      push('WORD', text.slice(start, i), lineSpan(startCol, col));
+      const word = text.slice(start, i);
+      const glued = GLUED_DOT.exec(word);
+      if (glued) {
+        push('WORD', glued[1], lineSpan(startCol, startCol + 1));
+        push('WORD', 'dot', lineSpan(startCol + 1, startCol + 4));
+        push('WORD', glued[2], lineSpan(startCol + 4, startCol + 5));
+      } else {
+        push('WORD', word, lineSpan(startCol, col));
+      }
       continue;
     }
 
@@ -213,10 +240,10 @@ export function lex(source: string): { tokens: Token[]; diagnostics: Diagnostic[
       continue;
     }
 
-    // Fallback: a character matching none of the rules above (e.g. a lone
-    // '!' not followed by '=', or a stray symbol outside the rule-1
-    // normalization table). The spec's rules don't define this case; rather
-    // than dropping the character silently or throwing, emit it as its own
+    // Fallback: a character matching none of the rules above (e.g. '@' or
+    // '#', or any stray symbol outside the rule-1 normalization table). The
+    // spec's rules don't define this case; rather than dropping the
+    // character silently or throwing, emit it as its own
     // PUNCT token - the one TokenKind in types.ts no rule above otherwise
     // produces - so no input vanishes and later stages can flag it. Read via
     // codePointAt/fromCodePoint (not `ch`, which is only one UTF-16 code

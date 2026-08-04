@@ -87,6 +87,21 @@ const CASES = [
   ['a∥b', ['WORD:a', 'OP:|', 'WORD:b']],
   ['f•g', ['WORD:f', 'WORD:dot', 'WORD:g']],
   ['f∙g', ['WORD:f', 'WORD:dot', 'WORD:g']],
+  // Glued dot product (rule 4's XdotY split): the un-spaced spelling of
+  // `f dot g`, and the shapes that must NOT split.
+  ['fdotg', ['WORD:f', 'WORD:dot', 'WORD:g']],
+  ['xdoty + zdotw', ['WORD:x', 'WORD:dot', 'WORD:y', 'OP:+', 'WORD:z', 'WORD:dot', 'WORD:w']],
+  ['Im(fdotg)', ['WORD:Im', 'LPAREN:(', 'WORD:f', 'WORD:dot', 'WORD:g', 'RPAREN:)']],
+  ['dot', ['WORD:dot']],
+  ['dotted', ['WORD:dotted']],
+  ['adotbc', ['WORD:adotbc']],
+  ['abdotc', ['WORD:abdotc']],
+  ['fdot', ['WORD:fdot']],
+  ['f2dotg', ['WORD:f2dotg']],
+  // '!' is an operator (postfix factorial); '!=' still wins the longest match.
+  ['n!', ['WORD:n', 'OP:!']],
+  ['(j-1)! + 1', ['LPAREN:(', 'WORD:j', 'OP:-', 'NUMBER:1', 'RPAREN:)', 'OP:!', 'OP:+', 'NUMBER:1']],
+  ['a != b!', ['WORD:a', 'OP:!=', 'WORD:b', 'OP:!']],
   // Supplementary: bracket kinds not otherwise all hit above.
   ['[a]', ['LBRACKET:[', 'WORD:a', 'RBRACKET:]']],
 ];
@@ -172,7 +187,7 @@ checkSpanIntegrity('x = 1\ny = 2', 'multi-line input reconstructs each line');
 checkSpanIntegrity('"abc', 'unterminated string reconstructs to EOL');
 checkSpanIntegrity('$abc', 'unterminated math-quote reconstructs to EOL');
 // PUNCT fallback cases (see Fallback section below) also carry real spans.
-checkSpanIntegrity('a ! b', 'PUNCT fallback (lone "!") reconstructs');
+checkSpanIntegrity('a ! b', 'lone "!" (postfix factorial OP) reconstructs');
 checkSpanIntegrity('@#%&`?', 'PUNCT fallback (run of unrecognized symbols) reconstructs');
 // CRLF: '\r' is skipped like whitespace, so it must show up as part of the
 // (whitespace-only) gap rather than breaking reconstruction.
@@ -291,15 +306,21 @@ check('normalizedCol', 'past-end overshoot is preserved even across a normalizat
   hasNormalizedCol && normalizedCol(DOT_SRC, DOT_SRC.length + 7) === dotNormalized.length + 7);
 
 // ============================================
-// PUNCT fallback: characters covered by none of the rules (e.g. a lone '!'
-// that isn't part of '!=') become their own PUNCT token rather than
-// vanishing or throwing. Nothing in the spec's rules defines this case;
-// PUNCT is the one TokenKind (see types.ts) no other rule produces, so it
-// is used here as the designated escape hatch. See report for this note.
+// PUNCT fallback: characters covered by none of the rules (e.g. '@' or '#')
+// become their own PUNCT token rather than vanishing or throwing. Nothing in
+// the spec's rules defines this case; PUNCT is the one TokenKind (see
+// types.ts) no other rule produces, so it is used here as the designated
+// escape hatch. See report for this note.
 // ============================================
-check('Fallback', "lone '!' (not followed by '=') lexes as a single PUNCT token", (() => {
+check('Fallback', "'@' (in no rule at all) lexes as a single PUNCT token", (() => {
+  const tok = lex('a @ b').tokens.filter((t) => t.kind !== 'NEWLINE');
+  return tok[1] && tok[1].kind === 'PUNCT' && tok[1].text === '@';
+})());
+// '!' is NOT a fallback character: it is the postfix factorial operator, and
+// the two-char class still claims it when it opens '!='.
+check('Fallback', "lone '!' (not followed by '=') lexes as OP, not PUNCT", (() => {
   const tok = lex('a ! b').tokens.filter((t) => t.kind !== 'NEWLINE');
-  return tok[1] && tok[1].kind === 'PUNCT' && tok[1].text === '!';
+  return tok[1] && tok[1].kind === 'OP' && tok[1].text === '!';
 })());
 check('Fallback', 'lexing unrecognized characters never throws', (() => {
   try { lex('@#%&`?'); return true; } catch { return false; }

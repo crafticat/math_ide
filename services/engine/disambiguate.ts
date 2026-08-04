@@ -147,8 +147,11 @@ const QUANTIFIER_WORDS = new Set(['forall', 'exists', 'suchthat', 'notin', 'impl
 const QUANTIFIER_OPS = new Set(['=>', '<=>']);
 
 // Punctuation that belongs to whichever side it separates rather than to a
-// run of its own (see attachPunctuation).
-const ATTACHING_OPS = new Set([',', '.', ';', ':']);
+// run of its own (see attachPunctuation). '!' is here for the same reason
+// '.' is: it is the factorial operator next to mathematics (`(j-1)!`) and an
+// exclamation mark next to English ("which is what we wanted!"), and
+// attachPunctuation reads exactly that neighbourhood.
+const ATTACHING_OPS = new Set([',', '.', ';', ':', '!']);
 
 const isSingleLetter = (w: string): boolean => w.length === 1 && /[A-Za-z]/.test(w);
 const isIndexedVar = (w: string): boolean => /^[A-Za-z][0-9]+$/.test(w);
@@ -167,23 +170,34 @@ interface Context {
   hasQuantifier: boolean;    // statement contains forall/exists/suchthat/notin/=>/<=>
 }
 
-// A call is `WORD ['...] (` where WORD is a known function or a single letter:
-// `sum(`, `f(`, `F'(`. A multi-char unknown word plus `(` is NOT a call - an
-// English sentence may simply end in a parenthetical. `cases {` counts too:
-// its body is a math environment, keywords and all (`v if c; v2 otherwise`).
-// A single LETTER additionally requires SPAN adjacency all the way to the
-// paren (no whitespace anywhere in `a(`/`F'(`) - otherwise "We have a
-// (possibly empty) set" reads `a (` as a call and drags the parenthetical
-// into math. FUNCTIONS names stay lenient about spacing (`sin (x)` is still
-// a call): they are never ordinary English words, so there is no
+// A call is `WORD ['...] (`: `sum(`, `f(`, `F'(`, `Im(`, `Aut(`. `cases {`
+// counts too: its body is a math environment, keywords and all (`v if c; v2
+// otherwise`).
+//
+// Everything except a FUNCTIONS name requires SPAN adjacency all the way to
+// the paren (no whitespace anywhere in `a(`/`F'(`/`Im(`) - that is the whole
+// discriminator against the other reading of `word (`, an English sentence
+// ending in a parenthetical: "We have a (possibly empty) set", "the set (a,
+// b)" - a remark is written with a space, an application without one. It is
+// what lets an unknown multi-char name like `Im(f)`, `Aut(G)` or `Var(X)` be
+// the call it plainly is instead of a prose word followed by a stranded
+// group - and a stranded group is not merely ugly: the run boundary it opens
+// leaves the bracket (or the `|` around it) alone in its own math run, where
+// it parses as Raw. FUNCTIONS names stay lenient about spacing (`sin (x)` is
+// still a call): they are never ordinary English words, so there is no
 // parenthetical-remark reading to protect.
+//
+// A word in STOP_WORDS is never a call name however it is spaced - `if(x >
+// 0)` and `no(such x)` are English with a tight parenthesis, not
+// applications - so the vocabulary keeps its say over the one shape where
+// adjacency alone would be wrong.
 const isAdjacent = (a: Token, b: Token): boolean => a.span.endLine === b.span.startLine && a.span.endCol === b.span.startCol;
 
 function callOpenerOf(tokens: Token[], wordIndex: number): number {
   const w = tokens[wordIndex];
   if (!w || w.kind !== 'WORD') return -1;
   const isFunction = FUNCTIONS[w.text] !== undefined;
-  if (!isFunction && !isSingleLetter(w.text)) return -1;
+  if (!isFunction && STOP_WORDS.has(w.text.toLowerCase())) return -1;
   let k = wordIndex + 1;
   let prev = w;
   while (tokens[k] && tokens[k].kind === 'OP' && tokens[k].text === "'") {
@@ -464,27 +478,51 @@ function scoreWord(ctx: Context, i: number): { score: number; reasons: string[] 
 
 // ---- Step C: run assembly ----
 
-// A parenthetical remark - prose ( ... prose ... ) prose - is English all the
-// way through, parens included. Everything else keeps its own class, so call
-// parens and grouping parens stay math. A missing neighbour at either edge of
-// the statement counts as satisfied, so a trailing "(see above)" still works.
+// A `(...)` group that holds any English at all is settled HERE, as a whole,
+// because the one thing it must never do is straddle a run boundary: a
+// boundary between a bracket and its partner leaves that bracket alone in a
+// math run, where the parser has no expression to make of it and can only
+// report it as Raw (`x = 5 (by Lemma 3)` used to render its parens as two
+// error spans). So the group goes one way or the other, parens included:
+//
+//   prose-dominant - English with no arithmetic in it: a parenthetical
+//     remark ("(see above)", "(possibly empty)", "(aRb AND bRc)"). The
+//     parens are punctuation of that English, so they read as prose too.
+//   otherwise      - a formula that happens to contain an odd unknown word
+//     ("(x + rules + 1)"): the group stays math and the word joins it,
+//     rendering as an upright identifier rather than tearing the group apart.
+//
+// "No arithmetic" is a math OP inside the group (`=`, `+`, `^`, ...); the
+// word count breaks the remaining ties toward the English reading, which is
+// the one that keeps more of the source readable when it is wrong.
+// Call parens are exempt: absoluteOf already made every word inside them
+// math, and an argument list is never a remark.
 function attachParentheticals(ctx: Context, verdicts: Verdict[], recordAt: (DecisionRecord | null)[]): void {
-  const { tokens, matchingParen } = ctx;
+  const { tokens, matchingParen, callParens } = ctx;
+  const setVerdict = (k: number, verdict: Verdict, reason: string): void => {
+    verdicts[k] = verdict;
+    const rec = recordAt[k];
+    if (rec && rec.verdict !== verdict) { rec.verdict = verdict; rec.reasons.push(reason); }
+  };
   for (let open = 0; open < tokens.length; open++) {
     if (tokens[open].kind !== 'LPAREN') continue;
     const close = matchingParen[open];
-    if (close < 0) continue;
-    const before = open > 0 ? verdicts[open - 1] : null;
-    const after = close < tokens.length - 1 ? verdicts[close + 1] : null;
-    if (before === 'math' || after === 'math') continue;
-    if (before === null && after === null) continue; // whole statement is one group: leave it alone
-    let hasProseWord = false;
-    for (let k = open + 1; k < close; k++) if (tokens[k].kind === 'WORD' && verdicts[k] === 'prose') hasProseWord = true;
-    if (!hasProseWord) continue;
-    for (let k = open; k <= close; k++) {
-      verdicts[k] = 'prose';
-      const rec = recordAt[k];
-      if (rec && rec.verdict !== 'prose') { rec.verdict = 'prose'; rec.reasons.push('parenthetical: joined the surrounding prose'); }
+    if (close < 0 || callParens.has(open)) continue;
+    let proseWords = 0;
+    let mathWords = 0;
+    let hasMathOp = false;
+    for (let k = open + 1; k < close; k++) {
+      const t = tokens[k];
+      if (t.kind === 'WORD') verdicts[k] === 'prose' ? proseWords++ : mathWords++;
+      else if (t.kind === 'OP' && MATH_OPS.has(t.text)) hasMathOp = true;
+    }
+    if (proseWords === 0) continue;
+    if (!hasMathOp && proseWords >= mathWords) {
+      for (let k = open; k <= close; k++) setVerdict(k, 'prose', 'parenthetical: joined the surrounding prose');
+    } else {
+      for (let k = open + 1; k < close; k++) {
+        if (verdicts[k] === 'prose') setVerdict(k, 'math', 'kept inside its math group');
+      }
     }
   }
 }

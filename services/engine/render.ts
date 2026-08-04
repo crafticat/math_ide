@@ -338,9 +338,14 @@ function renderNode(e: Expr, ctx: Ctx): string {
     case 'Matrix':
       return `\\begin{${e.env}}${e.rows.map((r) => r.map((c) => render(c, ctx)).join(CELL_SEP)).join(ROW_SEP)}\\end{${e.env}}`;
     case 'Cases':
+      // A branch with no condition and no `otherwise` gets no second column
+      // at all: `cases { x = 0; y = 1 }` is a braced system of equations, and
+      // labelling its rows "otherwise" would state a condition the author
+      // never wrote (types.ts).
       return `\\begin{cases}${e.branches.map((b) => {
-        const cond = b.condition ? `\\text{if }${render(b.condition, ctx)}` : '\\text{otherwise}';
-        return `${render(b.value, ctx)}${CELL_SEP}${cond}`;
+        const value = render(b.value, ctx);
+        if (b.condition) return `${value}${CELL_SEP}\\text{if }${render(b.condition, ctx)}`;
+        return b.otherwise ? `${value}${CELL_SEP}\\text{otherwise}` : value;
       }).join(ROW_SEP)}\\end{cases}`;
     case 'Relation':
       return renderRelation(e, ctx);
@@ -479,8 +484,11 @@ function renderCall(e: Expr & { kind: 'Call' }, ctx: Ctx, primes: string): strin
     case 'factorial': {
       const arg = e.args[0];
       // `n!` but `(n+1)!` - a compound operand needs the parens to keep the
-      // `!` from attaching to its last term only.
-      return arg && !isAtomicOperand(arg) ? `(${first})!` : `${first}!`;
+      // `!` from attaching to its last term only. A factorial OF a factorial
+      // needs them for a different reason: `n!!` is LaTeX's double factorial
+      // (n(n-2)(n-4)...), a different function from (n!)!.
+      const stacked = !!arg && arg.kind === 'Call' && arg.fn === 'factorial';
+      return arg && (!isAtomicOperand(arg) || stacked) ? `(${first})!` : `${first}!`;
     }
     case 'hat': case 'bar': case 'tilde': case 'vec': return `\\${e.fn}{${first}}`;
     // Geometry accents name POINTS, so a multi-letter argument is a point
@@ -569,12 +577,17 @@ export function parseStatement(tokens: Token[], diagnostics: Diagnostic[]): Pars
   if (!tokens || tokens.length === 0) return [];
   const { runs } = segment(tokens, diagnostics);
   const segments: ParsedSegment[] = [];
-  for (const run of runs) {
+  for (let i = 0; i < runs.length; i++) {
+    const run = runs[i];
     if (run.tokens.length === 0) continue;
     if (run.kind === 'prose') {
       segments.push({ kind: 'prose', tokens: run.tokens, text: proseText(run.tokens), span: spanOfRun(run.tokens) });
     } else {
-      const expr = parseExpression(run.tokens, diagnostics);
+      // Whether the NEXT run is prose is something only this loop knows, and
+      // the parser needs it: a math run that ends on an infix operator has
+      // its right operand right there, in that prose (`aRb => bRa`), and must
+      // not report it missing. See parseExpression's `proseFollows`.
+      const expr = parseExpression(run.tokens, diagnostics, runs[i + 1]?.kind === 'prose');
       segments.push({ kind: 'math', tokens: run.tokens, expr, span: expr.span });
     }
   }

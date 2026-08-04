@@ -25,3 +25,6 @@ dist-ssr
 
 # Test build artifacts (esbuild bundles for tests/engine/*)
 .test-build/
+
+# Dual-engine diff report (regenerate with: node scripts/engine-diff.mjs)
+scripts/engine-diff-report.md

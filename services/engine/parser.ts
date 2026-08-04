@@ -178,7 +178,7 @@ class Parser {
   // `{x : a | x}`), decided by the partner-bar lookahead in parseBinary.
   private absDepth = 0;
 
-  constructor(private toks: Token[], private diags: Diagnostic[]) {
+  constructor(private toks: Token[], private diags: Diagnostic[], private proseFollows = false) {
     this.end = toks.length;
   }
 
@@ -230,6 +230,17 @@ class Parser {
         let count = 0;
         while (this.isOp(this.peek(), "'")) { count++; this.pos++; }
         left = { kind: 'Prime', operand: left, count, span: this.span(left.span, this.toks[this.pos - 1].span) };
+        continue;
+      }
+
+      // postfix ! (factorial), level 50 - the same node `factorial(n)` builds,
+      // so `(j-1)!` and `factorial(j-1)` are one construct with two spellings
+      // and one rendering rule. Binds like a prime: tighter than any product,
+      // looser than a script, so `n!^2` is (n!)^2 and `2n!` is 2(n!).
+      if (t.kind === 'OP' && t.text === '!') {
+        if (BP.PRIME < minBp) break;
+        this.pos++;
+        left = { kind: 'Call', fn: 'factorial', args: [left], span: this.span(left.span, t.span) };
         continue;
       }
 
@@ -418,7 +429,18 @@ class Parser {
     const t = this.peek();
     if (!t) {
       const span = this.emptySpan(this.pos);
-      this.diags.push({ span, severity: 'warn', message: 'expression ends early — missing operand' });
+      // Mirror image of the continuation-line idiom in the OP case below: a
+      // run that ENDS on an infix operator is not truncated input when the
+      // operand it is reaching for is the PROSE that follows it - `aRb =>
+      // bRa` segments as prose / `=>` / prose, so the whole math run is that
+      // one operator and BOTH its operands are next door. Only the renderer
+      // can see that (it holds the run list), so it passes proseFollows; the
+      // operand then goes missing exactly as silently as a leading operator's
+      // does. Everything else - `x +` with nothing after it, an operand
+      // missing inside brackets (pos < toks.length) - still reports.
+      if (!(this.proseFollows && this.pos === this.toks.length)) {
+        this.diags.push({ span, severity: 'warn', message: 'expression ends early — missing operand' });
+      }
       return { kind: 'Raw', text: '', span };
     }
     switch (t.kind) {
@@ -477,10 +499,17 @@ class Parser {
 
     // WORD ['...] LPAREN -> Call (known or unknown function alike); primes seen
     // between the word and its parens attach AFTER the Call: F'(x).
+    //
+    // A word that already NAMES A SYMBOL is the exception: `phi(x)`,
+    // `sigma(n)`, `partial(x)^2` are that symbol applied to a group, and
+    // calling them functions would print the symbol's own spelling as an
+    // upright identifier (`\mathrm{phi}(x)`) instead of the letter the author
+    // asked for. Only symbols with no FUNCTIONS entry take this exit - `sin`,
+    // `sqrt`, `det` and friends are in both tables and stay calls.
     let k = start + 1;
     let primes = 0;
     while (this.kindAt(k) === 'OP' && this.toks[k].text === "'") { primes++; k++; }
-    if (this.kindAt(k) === 'LPAREN') return this.parseCall(start, k, primes);
+    if (this.kindAt(k) === 'LPAREN' && !this.namesSymbol(w)) return this.parseCall(start, k, primes);
 
     // Math.xxx
     if (w === 'Math' && this.isOp(this.toks[start + 1], '.') && this.kindAt(start + 2) === 'WORD') {
@@ -498,6 +527,14 @@ class Parser {
     if (w.length === 1) return { kind: 'Var', name: w, span };
     if (MATH_KEYWORDS.has(w)) return { kind: 'Sym', name: w, latex: SYMBOL_MAP[w] ?? w, span };
     return { kind: 'Ident', name: w, span };
+  }
+
+  /** True when `w` resolves to a symbol below (greek letter, SYMBOL_MAP entry
+   *  or bare MATH_KEYWORD) and is not also a function name - i.e. when the
+   *  word is a glyph, not a callee. */
+  private namesSymbol(w: string): boolean {
+    if (FUNCTIONS[w] !== undefined) return false;
+    return GREEK[w] !== undefined || SYMBOL_MAP[w] !== undefined || MATH_KEYWORDS.has(w);
   }
 
   // Quantifier-prefix rule: `forall eps > 0` -> juxt(forall, Relation(>)).
@@ -585,8 +622,10 @@ class Parser {
       if (ifIdx >= 0) return { value: this.parseRange(a, ifIdx), condition: this.parseRange(ifIdx + 1, b) };
       // `otherwise` only acts as the no-condition marker when it trails the
       // branch; anywhere else it is just a word (so no tokens get dropped).
+      // The flag keeps it distinguishable from a branch with no condition at
+      // all, which must not grow one in the renderer (see types.ts).
       if (this.kindAt(b - 1) === 'WORD' && this.toks[b - 1].text === 'otherwise') {
-        return { value: this.parseRange(a, b - 1), condition: null };
+        return { value: this.parseRange(a, b - 1), condition: null, otherwise: true };
       }
       return { value: this.parseRange(a, b), condition: null };
     });
@@ -906,8 +945,12 @@ class Parser {
  * Parses one math run into a single Expr. Diagnostics from recovery are pushed
  * onto `diagnostics`. Never throws: a failure inside the parser itself still
  * yields a Raw node covering the run.
+ *
+ * `proseFollows` says a PROSE run comes next in the same statement. It only
+ * ever silences one diagnostic - the operand a trailing infix operator is
+ * reaching for, which in that case is the prose (see parseAtom).
  */
-export function parseExpression(tokens: Token[], diagnostics: Diagnostic[]): Expr {
+export function parseExpression(tokens: Token[], diagnostics: Diagnostic[], proseFollows = false): Expr {
   if (tokens.length === 0) {
     return { kind: 'Raw', text: '', span: { startLine: 1, startCol: 0, endLine: 1, endCol: 0 } };
   }
@@ -915,7 +958,7 @@ export function parseExpression(tokens: Token[], diagnostics: Diagnostic[]): Exp
   const last = tokens[tokens.length - 1].span;
   const span: Span = { startLine: first.startLine, startCol: first.startCol, endLine: last.endLine, endCol: last.endCol };
   try {
-    return new Parser(tokens, diagnostics).parse();
+    return new Parser(tokens, diagnostics, proseFollows).parse();
   } catch (err) {
     const text = tokens.map((t) => t.text).join(' ');
     diagnostics.push({

@@ -345,6 +345,9 @@ const EXPR_CASES = [
   ['factorial(n)', String.raw`n!`],
   ['factorial(n+1)', String.raw`(n+1)!`],
   ['det(A)', String.raw`\det(A)`],
+  // a symbol-named word keeps its glyph in call position
+  ['phi(x)', String.raw`\phi(x)`],
+  ['partial^2/partial(x)^2', String.raw`\frac{\partial^{2}}{\partial(x)^{2}}`],
   ['gcd(a, b)', String.raw`\gcd(a, b)`],
   ['hat(x) + bar(y) + tilde(z) + vec(v)', String.raw`\hat{x}+\bar{y}+\tilde{z}+\vec{v}`],
   ['overline(AB)', String.raw`\overline{AB}`],
@@ -382,6 +385,16 @@ const EXPR_CASES = [
   ['x^(a)^(b)', String.raw`{x^{a}}^{b}`],
   ['x^(a)^(b)^(c)', String.raw`{{x^{a}}^{b}}^{c}`],
   ['a_(i)_(j)', String.raw`{a_{i}}_{j}`],
+  // cases: only a branch that SAYS `otherwise` gets the otherwise column; a
+  // braced system of equations gets no second column at all
+  ['cases { x = 0; y = 1 }', String.raw`\begin{cases}x=0\\ y=1\end{cases}`],
+  ['cases { a if b; c }', String.raw`\begin{cases}a & \text{if }b\\ c\end{cases}`],
+  // factorial: both spellings render identically, and a factorial OF a
+  // factorial keeps its parens (`n!!` is LaTeX's double factorial)
+  ['n!', String.raw`n!`],
+  ['floor((j-1)! + 1)', String.raw`\lfloor (j-1)!+1 \rfloor`],
+  ['factorial(factorial(n))', String.raw`(n!)!`],
+  ['That is amazing!', String.raw`\text{That is amazing!}`],
   // differentials
   ['integral(a -> b) f(x) dx', String.raw`\int_{a}^{b} f(x)\,dx`],
   // QED loses SYMBOL_MAP's legacy \quad prefix at the renderer level
@@ -417,7 +430,15 @@ for (const [source, want] of MATH_CASES) {
 // dangling `y =` the source space stays INSIDE the text braces instead of
 // becoming the `\ ` separator a complete clause earns (golden 19).
 checkExact('Math', 'dangling relation before prose gets no clause-break space',
-  render('y = unknownfn(x)').latex, String.raw`y=\text{ unknownfn}(x)`);
+  render('y = unknownfn thing').latex, String.raw`y=\text{ unknownfn thing}`);
+
+// Call form is decided by ADJACENCY, not by vocabulary: an unknown name
+// written tight against its paren is the application it looks like, while the
+// same word with a space before the paren is prose plus a parenthetical.
+checkExact('Math', 'unknown name tight against "(" is a call',
+  render('y = unknownfn(x)').latex, String.raw`y=\mathrm{unknownfn}(x)`);
+checkExact('Math', 'the same name with a space before "(" stays prose',
+  render('y = unknownfn (x)').latex, String.raw`y=\text{ unknownfn }(x)`);
 
 // ============================================
 // Robustness - renderStatement must never throw
@@ -501,6 +522,21 @@ for (const source of ROBUST) {
   const { diagnostics } = renderDoc('Problem 1 {\n  x^2 + sqrt(\n}');
   check('Diagnostics', 'renderDocument accumulates statement diagnostics',
     diagnostics.some((d) => d.message.includes('could not parse')), JSON.stringify(diagnostics.map((d) => d.message)));
+}
+// A math run that ends on an operator whose operand is the FOLLOWING prose is
+// complete input, not truncated: the symmetric case of the leading-operator
+// continuation idiom, and equally silent. A trailing operator with nothing
+// after it at all still reports.
+{
+  const { latex, diagnostics } = render('aRb => bRa');
+  check('Diagnostics', '"aRb => bRa" renders prose-implies-prose with NO diagnostic',
+    latex === String.raw`\text{aRb }\implies\text{ bRa}` && diagnostics.length === 0,
+    `${latex} | ${JSON.stringify(diagnostics.map((d) => d.message))}`);
+}
+{
+  const { diagnostics } = render('x +');
+  check('Diagnostics', '"x +" (nothing follows at all) still reports the missing operand',
+    diagnostics.some((d) => d.message.includes('missing operand')), JSON.stringify(diagnostics.map((d) => d.message)));
 }
 
 // parseStatement/renderSegments must not double-parse (spec-review fix 2):

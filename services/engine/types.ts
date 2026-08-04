@@ -33,7 +33,12 @@ export type Expr =
   | { kind: 'AngleVector'; elements: Expr[]; span: Span }
   | { kind: 'Group'; operand: Expr; bracket: '(' | '['; span: Span } // explicit user parens kept for rendering
   | { kind: 'Matrix'; env: 'pmatrix' | 'bmatrix' | 'vmatrix'; rows: Expr[][]; span: Span }
-  | { kind: 'Cases'; branches: { value: Expr; condition: Expr | null }[]; span: Span }
+  // condition: the `if c` of a branch. `otherwise` records that the branch
+  // ended in the literal word `otherwise` - a conditionless branch is NOT the
+  // same thing (`cases { x = 0; y = 1 }` is a system of equations, and
+  // printing "otherwise" on its rows would invent a condition the source
+  // never stated).
+  | { kind: 'Cases'; branches: { value: Expr; condition: Expr | null; otherwise?: boolean }[]; span: Span }
   | { kind: 'Relation'; ops: string[]; operands: Expr[]; span: Span } // n-ary chain: operands.length === ops.length + 1; ops from: = != < > <= >= in notin subset congruent similar parallel perp corresponds implies iff
   | { kind: 'Raw'; text: string; span: Span }; // recovery: renders as \texttt
 
