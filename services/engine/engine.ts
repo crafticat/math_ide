@@ -24,19 +24,33 @@
 // ---- The caret model ----
 //
 // Spans are 1-based lines / 0-based columns, end-exclusive (types.ts), and
-// are measured against the lexer's NORMALIZED text - so a caret coming from
-// the editor must be in those same coordinates.
+// are measured against the lexer's NORMALIZED text. A caret coming from the
+// editor, though, is in RAW source coordinates - the text the user actually
+// typed, before `·≤≥≠→` and friends are rewritten (lexer.ts's rule 1) - so
+// the public nodeAt() maps every incoming column through normalizedCol()
+// (against the matching raw line, kept on the compile() result as
+// `sourceLines`) before it ever compares a column to a span. Past that point
+// - pathToCaret, nodeAtNormalized, spanContains - everything works in
+// normalized coordinates only; raw columns exist nowhere below nodeAt()'s
+// own top.
 //
-// nodeAt walks DOWN to the smallest node containing the caret and then back
-// UP to the nearest STRUCTURAL ancestor. The walk up is the whole point: the
-// smallest node under the caret is almost always a bare leaf (the `1` in
-// `(x-1)`), and tinting - or, later, transforming - a lone digit is not a
-// useful unit of work. The nearest enclosing Frac/Pow/Call/... is.
+// nodeAt also applies a "character-behind" convention: a strict miss (most
+// commonly a caret sitting one column past the last character of a
+// statement - exactly where it lands the instant the user finishes typing,
+// and end-exclusive spans mean that column belongs to nothing) retries once
+// at `col - 1` before giving up, so the node the user just finished typing
+// is still found.
+//
+// nodeAtNormalized walks DOWN to the smallest node containing the caret and
+// then back UP to the nearest STRUCTURAL ancestor. The walk up is the whole
+// point: the smallest node under the caret is almost always a bare leaf (the
+// `1` in `(x-1)`), and tinting - or, later, transforming - a lone digit is
+// not a useful unit of work. The nearest enclosing Frac/Pow/Call/... is.
 
 import type { Block, CompileResult, Diagnostic, Expr, Span, Token } from './types';
 import type { StatementTokens } from './document';
 import type { ParsedSegment } from './render';
-import { lex } from './lexer';
+import { lex, normalizedCol } from './lexer';
 import { parseDocument } from './document';
 import { childrenOf, parseStatement, renderDocument, renderStatementLine } from './render';
 
@@ -60,7 +74,14 @@ export interface StatementIndexEntry {
 /** A caret resolved to a node, plus the statement it lives in. */
 export interface NodeHit { expr: Expr; statement: StatementIndexEntry }
 
-export type EngineResult = CompileResult & { index: StatementIndexEntry[] };
+export type EngineResult = CompileResult & {
+  index: StatementIndexEntry[];
+  /** The raw source, split on '\n' - one entry per 1-based line number minus
+   *  one. Used only to map an incoming caret's RAW column onto the lexer's
+   *  NORMALIZED coordinates before span lookup (see "The caret model" above);
+   *  nothing else in the engine reads it. */
+  sourceLines: string[];
+};
 
 // Node kinds worth selecting: the ones that mean something structurally, and
 // that a user would recognise as "the thing I clicked". Everything else
@@ -143,7 +164,7 @@ export function compile(source: string): EngineResult {
   walk(ast.blocks, 0);
 
   const latexLines = renderDocument(ast, diagnostics, parsed);
-  return { latexLines, macros: ast.macros, diagnostics, ast, index };
+  return { latexLines, macros: ast.macros, diagnostics, ast, index, sourceLines: source.split('\n') };
 }
 
 // ---- nodeAt ----
@@ -166,13 +187,18 @@ function pathToCaret(root: Expr, line: number, col: number): Expr[] | null {
 }
 
 /**
- * The node under the caret: the smallest expression containing (line, col),
- * lifted to the nearest enclosing STRUCTURAL node (itself, if it already is
- * one). Returns null for a caret that is on prose, inside an unparseable
- * Raw run, between statements, or in a subtree with no structural node above
- * it (a lone `x` is not worth selecting).
+ * Strict caret lookup in NORMALIZED (line, col) coordinates: the smallest
+ * expression containing the caret, lifted to the nearest enclosing
+ * STRUCTURAL node (itself, if it already is one). Returns null for a caret
+ * that is on prose, inside an unparseable Raw run, between statements, past
+ * the end of its statement (spans are end-exclusive), or in a subtree with
+ * no structural node above it (a lone `x` is not worth selecting).
+ *
+ * Internal - see "The caret model" above. Callers go through the public
+ * nodeAt() below, which maps raw editor coordinates onto this function's
+ * coordinates and adds the end-of-statement retry.
  */
-export function nodeAt(result: EngineResult, line: number, col: number): NodeHit | null {
+function nodeAtNormalized(result: EngineResult, line: number, col: number): NodeHit | null {
   const entry = result.index.find((e) => spanContains(e.span, line, col));
   if (!entry) return null;
 
@@ -192,13 +218,34 @@ export function nodeAt(result: EngineResult, line: number, col: number): NodeHit
   return null;
 }
 
+/**
+ * The node under the caret. `(line, col)` is in the EDITOR's own RAW
+ * coordinates (see "The caret model" above): this maps `col` through
+ * normalizedCol() against the matching raw source line and runs the strict
+ * lookup above.
+ *
+ * A strict miss retries once at `col - 1` (re-mapped the same way) before
+ * giving up - the "character-behind" convention that makes a caret sitting
+ * right after the last character the user just typed (one column past a
+ * statement's end-exclusive span) still resolve to the node that character
+ * belongs to, instead of nothing.
+ */
+export function nodeAt(result: EngineResult, line: number, col: number): NodeHit | null {
+  const rawLine = result.sourceLines[line - 1] ?? '';
+  const hit = nodeAtNormalized(result, line, normalizedCol(rawLine, col));
+  if (hit) return hit;
+  return col > 0 ? nodeAtNormalized(result, line, normalizedCol(rawLine, col - 1)) : null;
+}
+
 // ---- renderLineWithHighlight (the Task 11 hook) ----
 
 /**
  * Re-renders JUST the statement under the caret, with the node nodeAt()
- * resolved wrapped in \htmlClass{hl-node}{...}. The view swaps this string in
- * for that one line's LaTeX; every other line is untouched, and no stage of
- * the pipeline re-runs (the entry's segments are already parsed).
+ * resolved wrapped in \htmlClass{hl-node}{...}. `(line, col)` are forwarded
+ * to nodeAt() as-is, so they are RAW editor coordinates too. The view swaps
+ * this string in for that one line's LaTeX; every other line is untouched,
+ * and no stage of the pipeline re-runs (the entry's segments are already
+ * parsed).
  *
  * Returns null exactly when nodeAt does.
  */

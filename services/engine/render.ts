@@ -267,11 +267,17 @@ function render(e: Expr, ctx: Ctx): string {
   if (ctx.cfrac && e.kind !== 'Frac' && e.kind !== 'Group' && e.kind !== 'BinOp') {
     ctx = { ...ctx, cfrac: false };
   }
-  const latex = renderNode(e, ctx);
-  if (latex && ctx.highlight && sameSpan(e.span, ctx.highlight.span)) {
-    return `\\htmlClass{hl-node}{${latex}}`;
-  }
-  return latex;
+  // Decided BEFORE rendering `e`'s children, and cleared from the ctx they
+  // render with: a macro-expanded subtree can have a child whose span is
+  // IDENTICAL to its parent's (expandMacros re-spans every replacement token
+  // onto the single usage-site token - document.ts's rule 3), so without
+  // clearing it here, both parent and child would independently match
+  // ctx.highlight and each wrap the other's output in its own \htmlClass,
+  // nesting duplicate wrappers instead of the one the caret actually
+  // resolved to.
+  const hit = !!ctx.highlight && sameSpan(e.span, ctx.highlight.span);
+  const latex = renderNode(e, hit ? { ...ctx, highlight: undefined } : ctx);
+  return latex && hit ? `\\htmlClass{hl-node}{${latex}}` : latex;
 }
 
 function renderNode(e: Expr, ctx: Ctx): string {

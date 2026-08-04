@@ -581,6 +581,86 @@ const frac = compile(FRAC_SRC);
 }
 
 // ============================================
+// (h) Raw-coordinate caret mapping (Fix A: normalizedCol)
+// Spans are measured against the NORMALIZED source (lexer.ts's rule 1), but
+// an editor caret is in RAW coordinates - the text as actually typed. `·`
+// alone expands to ` dot ` (+4 columns), so a caret computed in RAW
+// coordinates and used AS-IS (not mapped through normalizedCol) lands 4
+// columns short: inside the `dot` operator token instead of on the exponent,
+// whose smallest containing node is the `2 dot x^2` product - which has no
+// structural ancestor smaller than the enclosing (whole-statement) Relation.
+// ============================================
+{
+  const RAW_SRC = 'y = 2·x^2 + 1';
+  const r = compile(RAW_SRC);
+  check('RawCaret', 'dot-fixture compiles clean (1 statement, 0 diagnostics)',
+    r.index.length === 1 && r.diagnostics.length === 0, JSON.stringify(r.diagnostics));
+  check('RawCaret', 'result carries sourceLines (raw source split on \\n)',
+    Array.isArray(r.sourceLines) && r.sourceLines.length === 1 && r.sourceLines[0] === RAW_SRC,
+    JSON.stringify(r.sourceLines));
+
+  // RAW column of the exponent's `2` - exactly what the editor would report
+  // for a caret there, computed against the ORIGINAL (pre-normalization)
+  // source string, like every other caret column in this suite.
+  const rawExpCol = RAW_SRC.indexOf('x^2') + 2;
+  const hit = nodeAt(r, 1, rawExpCol);
+  check('RawCaret', `caret in RAW coords on the 2 of x^2 [raw col ${rawExpCol}] -> Pow`,
+    !!hit && hit.expr.kind === 'Pow', hit ? `${hit.expr.kind} ${spanStr(hit.expr.span)}` : 'null');
+}
+
+// ============================================
+// (i) Caret at the exact end of a statement (Fix B: character-behind retry)
+// Spans are end-exclusive, so a caret that has just moved past the LAST
+// character of a statement (col === line length - right where it sits the
+// instant the user finishes typing) matches nothing on a strict lookup.
+// nodeAt now retries once at col-1 before giving up, so that still resolves
+// to whatever the user just typed; going a second column too far
+// (length + 1) is still nothing - the retry is exactly one column, not a
+// search.
+// ============================================
+{
+  const SRC = 'a^2 + b^2 = c^2';
+  const r = compile(SRC);
+  check('EndCaret', 'fixture compiles clean (1 statement, 0 diagnostics)',
+    r.index.length === 1 && r.diagnostics.length === 0, JSON.stringify(r.diagnostics));
+
+  const endHit = nodeAt(r, 1, SRC.length);
+  check('EndCaret', `caret at col ${SRC.length} (line length, just typed the last char) -> Pow`,
+    !!endHit && endHit.expr.kind === 'Pow', endHit ? `${endHit.expr.kind} ${spanStr(endHit.expr.span)}` : 'null');
+
+  check('EndCaret', `caret at col ${SRC.length + 1} (one PAST line length) -> still null`,
+    nodeAt(r, 1, SRC.length + 1) === null, JSON.stringify(nodeAt(r, 1, SRC.length + 1)));
+}
+
+// ============================================
+// (j) Macro-span duplicate highlight wrappers (Fix C)
+// expandMacros (document.ts) re-spans every replacement token onto the
+// SINGLE usage-site token's own span - so `P`, expanded from `#define P
+// y^2`, produces a Var/Num/Pow that all carry the EXACT SAME span. Before
+// the fix, render()'s highlight check ran independently at every one of
+// those coincidentally-equal-span levels as it recursed, nesting a wrapper
+// at each one; the fix clears ctx.highlight for a node's own children once
+// THAT node has already matched, so only the outermost (correct) node gets
+// wrapped.
+// ============================================
+{
+  const SRC = '#define P y^2\nz = P + 1';
+  const r = compile(SRC);
+  check('MacroHighlight', 'macro fixture compiles clean (1 statement, 0 diagnostics)',
+    r.index.length === 1 && r.diagnostics.length === 0, JSON.stringify(r.diagnostics));
+
+  const pLine = lineOf(SRC, 'z = P + 1');
+  const pCol = colOf(SRC, 'z = P + 1', 'P');
+  const out = renderLineWithHighlight(r, pLine, pCol);
+  check('MacroHighlight', `caret on the macro-expanded P [${pLine}:${pCol}] resolves and re-renders`,
+    !!out && typeof out.latex === 'string', JSON.stringify(out));
+
+  const wrapperCount = out ? out.latex.split(HL_OPEN).length - 1 : -1;
+  check('MacroHighlight', `rendered line contains EXACTLY ONE hl-node wrapper (got ${wrapperCount})`,
+    wrapperCount === 1, out && out.latex);
+}
+
+// ============================================
 // Summary
 // ============================================
 console.log('\n' + '═'.repeat(50));

@@ -35,6 +35,26 @@ function normalizeSource(source: string): string {
     .replace(/→/g, '->');
 }
 
+// Maps a caret's RAW column (the editor's own coordinates, before
+// normalization) onto the NORMALIZED column every span in this engine is
+// measured against - e.g. the `·` in `2·x` is one raw character but five
+// normalized ones (` dot `), so a caret sitting after it needs a +4 shift to
+// still land on the token it visually sits on. `rawLine` is the SOURCE line
+// the caret is on (one line of the original, un-normalized document) -
+// engine.ts's nodeAt() is the only caller, and the only place a caret
+// crosses from editor coordinates into engine coordinates.
+//
+// The two early returns are DELIBERATELY not clamped into [0, rawLine.length]:
+// an out-of-range rawCol (negative, or past the end of the line) must map to
+// an equally out-of-range normalized col, so that a caret there still misses
+// every span and nodeAt still returns null - clamping would silently pull an
+// invalid caret onto a valid one.
+export function normalizedCol(rawLine: string, rawCol: number): number {
+  if (rawCol <= 0) return rawCol;
+  if (rawCol >= rawLine.length) return normalizeSource(rawLine).length + (rawCol - rawLine.length);
+  return normalizeSource(rawLine.slice(0, rawCol)).length;
+}
+
 const isDigit = (ch: string | undefined): boolean => ch !== undefined && ch >= '0' && ch <= '9';
 const isLetter = (ch: string | undefined): boolean =>
   ch !== undefined && ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z'));

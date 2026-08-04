@@ -42,8 +42,9 @@ check('Bundle', 'bundled output file exists on disk', existsSync(new URL(modUrl)
 const mod = await import(modUrl);
 check('Bundle', 'bundled ESM module imported successfully', !!mod);
 check('Bundle', 'module exports lex()', typeof mod.lex === 'function');
+check('Bundle', 'module exports normalizedCol()', typeof mod.normalizedCol === 'function');
 
-const { lex } = mod;
+const { lex, normalizedCol } = mod;
 
 // ============================================
 // Helpers
@@ -241,6 +242,53 @@ check('Normalized', 'plain ascii input round-trips through .normalized unchanged
 check('Normalized', "'f·g'.normalized === 'f dot g'", lex('f·g').normalized === 'f dot g');
 check('Normalized', "'a∣b'.normalized === 'a|b'", lex('a∣b').normalized === 'a|b');
 check('Normalized', "'x ≤ y'.normalized === 'x <= y'", lex('x ≤ y').normalized === 'x <= y');
+
+// ============================================
+// normalizedCol: maps a caret's RAW column onto the NORMALIZED column its
+// span was measured against (engine.ts's nodeAt() is the only caller, for
+// mapping an editor caret before span lookup - see Task "raw->normalized
+// column mapping"). Every check below is gated on hasNormalizedCol
+// (short-circuit &&, not a throwing call) so a pre-fix bundle that doesn't
+// export it yet fails loudly here instead of throwing and aborting the rest
+// of this suite.
+// ============================================
+const hasNormalizedCol = typeof normalizedCol === 'function';
+
+check('normalizedCol', 'ascii text, interior column: identity',
+  hasNormalizedCol && normalizedCol('a = b + c', 4) === 4);
+check('normalizedCol', 'ascii text, column 0: identity',
+  hasNormalizedCol && normalizedCol('a = b', 0) === 0);
+check('normalizedCol', 'ascii text, column === length: identity',
+  hasNormalizedCol && normalizedCol('a = b', 5) === 5);
+
+// '·' (one raw char) expands to ' dot ' (five normalized chars, i.e. +4) -
+// so a raw column AFTER it must shift by 4, while one AT OR BEFORE it does
+// not shift at all. Expected values are self-computed against the real
+// lex() output (indexOf on the normalized string), not hand-counted magic
+// numbers, matching this suite's convention throughout.
+const DOT_SRC = 'y = 2·x^2 + 1';
+const dotNormalized = lex(DOT_SRC).normalized;
+check('normalizedCol', 'sanity: DOT_SRC normalizes to the expected 4-column-longer string',
+  dotNormalized === 'y = 2 dot x^2 + 1' && dotNormalized.length === DOT_SRC.length + 4);
+check('normalizedCol', 'raw column BEFORE the · is unshifted',
+  hasNormalizedCol && normalizedCol(DOT_SRC, DOT_SRC.indexOf('2')) === dotNormalized.indexOf('2'));
+check('normalizedCol', 'raw column AT the · itself maps to the start of its " dot " expansion',
+  hasNormalizedCol && normalizedCol(DOT_SRC, DOT_SRC.indexOf('·')) === dotNormalized.indexOf(' dot '));
+check('normalizedCol', 'raw column AFTER the · (the exponent digit) shifts by +4',
+  hasNormalizedCol && normalizedCol(DOT_SRC, DOT_SRC.indexOf('x^2') + 2) === dotNormalized.indexOf('x^2') + 2);
+check('normalizedCol', 'raw column at end-of-line maps to normalized end-of-line',
+  hasNormalizedCol && normalizedCol(DOT_SRC, DOT_SRC.length) === dotNormalized.length);
+
+// The two early-return branches are DELIBERATELY not clamped: engine.ts's
+// nodeAt() relies on an out-of-range raw column staying equally out-of-range
+// after mapping (so a caret that misses every span still misses after the
+// map) - clamping would silently pull an invalid caret onto a valid one.
+check('normalizedCol', 'negative column is returned UNCLAMPED (not pulled to 0)',
+  hasNormalizedCol && normalizedCol('a = b', -3) === -3);
+check('normalizedCol', 'past-end column is returned UNCLAMPED, preserving the overshoot',
+  hasNormalizedCol && normalizedCol('a = b', 5 + 7) === 'a = b'.length + 7);
+check('normalizedCol', 'past-end overshoot is preserved even across a normalization-lengthening line',
+  hasNormalizedCol && normalizedCol(DOT_SRC, DOT_SRC.length + 7) === dotNormalized.length + 7);
 
 // ============================================
 // PUNCT fallback: characters covered by none of the rules (e.g. a lone '!'
