@@ -252,6 +252,21 @@ const CASES = [
   // ---- T9.5 fix 5: the sentence colon ----
   ['Note the following: x = 1',
     { Note: 'prose', the: 'prose', following: 'prose', x: 'math' }],
+
+  // ---- `partial` prose-collision fix: PROSE_COLLIDING_SYMBOLS + symbolWord ----
+  // `partial` collides with ordinary analysis prose ("the partial sums stay
+  // bounded", "the partial order on S") the same way `sum`/`lim` collide with
+  // English verbs - but it was never a FUNCTIONS name, so it had no
+  // bareKeyword carve-out and was claimed outright by the GREEK absolute:
+  // "the partial sums stay bounded" used to render
+  // `\text{the }\partial\text{ sums stay bounded}` with no diagnostic.
+  // PROSE_COLLIDING_SYMBOLS routes it through scoring instead (symbolWord,
+  // +2), which both directions need: English on either side outvotes it, and
+  // any notation neighbour - alone, or next to `^`/`/`/another letter, the
+  // PDE spelling - keeps it a symbol.
+  ['the partial sums stay bounded',
+    { the: 'prose', partial: 'prose', sums: 'prose', stay: 'prose', bounded: 'prose' }],
+  ['partial^2 u/partial x^2', { partial: 'math' }],
 ];
 
 const results = new Map();

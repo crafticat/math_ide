@@ -565,6 +565,30 @@ for (const [source, want] of T95_PINS) {
 }
 
 // ============================================
+// Prose-collision fix: `partial` no longer shadows English prose
+// ============================================
+// `partial` collides with ordinary analysis prose ("the partial sums stay
+// bounded", "the partial order on S") the way `sum`/`lim` collide with
+// English verbs - but it was never a FUNCTIONS name, so it had no
+// bareKeyword carve-out and was claimed outright by the GREEK absolute.
+// Before this fix the line below rendered
+// `\text{the }\partial\text{ sums stay bounded}` - a silent partial-symbol
+// dropped into the middle of an English sentence, no diagnostic (see
+// docs/superpowers/specs/2026-08-04-golden-migration-notes.md, known
+// limitation 5). PROSE_COLLIDING_SYMBOLS + the symbolWord scoring feature
+// route `partial` through the same neighbourhood scoring as any other
+// ambiguous word instead, so English on both sides wins outright.
+const PARTIAL_PROSE_PINS = [
+  ['the partial sums stay bounded', String.raw`\text{the partial sums stay bounded}`],
+];
+for (const [source, want] of PARTIAL_PROSE_PINS) {
+  const { latex, diagnostics } = render(source);
+  checkExact('Prose', JSON.stringify(source), latex, want);
+  check('Prose', `${JSON.stringify(source)} - compiles with zero diagnostics`,
+    diagnostics.length === 0, JSON.stringify(diagnostics.map((d) => d.message)));
+}
+
+// ============================================
 // Robustness - renderStatement must never throw
 // ============================================
 const ROBUST = [

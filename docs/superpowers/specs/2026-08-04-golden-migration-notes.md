@@ -261,14 +261,37 @@ readable.
    pass - see engine fixes 10 and 11 above. `x_(ij)` now renders `x_{ij}`.
    Recorded here because it was a silent wrong answer (no diagnostic), which is
    the failure mode worth watching for in the others.
-5. **A math keyword inside prose wins over the English word.** OPEN, found
-   while writing the realistic-document fixtures. `partial` and `sum` are
-   `MATH_KEYWORDS`, i.e. always math, so "the partial sums stay bounded"
-   renders `\partial\mathrm{sums}` and "the sum converges" renders `\sum`. No
-   diagnostic - another silent wrong answer, and the reason those two phrasings
-   are absent from `tests/engine/test-documents.mjs`. The `and`/`or`/`not`
-   context rule is the shape a fix would take, but the keyword set is large and
-   the fix is a scoring change, not a table edit, so it is scoped out here.
+5. ~~**A math keyword inside prose wins over the English word, for `partial`.**~~
+   FIXED by this commit, for `partial` only - the geometry collisions below
+   remain OPEN. Found while writing the realistic-document fixtures:
+   `partial` collides with ordinary prose ("the partial sums stay bounded",
+   "the partial order on S") and used to be claimed outright by the GREEK
+   absolute (`GREEK['partial']` is checked before `MATH_KEYWORDS`, which also
+   lists it, so either table would have claimed it first), so "the partial
+   sums stay bounded" actually rendered
+   `\text{the }\partial\text{ sums stay bounded}` - a ∂ dropped into the
+   middle of an English sentence, no diagnostic, and the reason that phrasing
+   was absent from `tests/engine/test-documents.mjs`. (`sum`, despite also
+   being listed in `MATH_KEYWORDS`, was never actually affected: it is a
+   `FUNCTIONS` name, and `absoluteOf`'s BARE-CALLABLE carve-out returns null
+   for any `FUNCTIONS` word - short-circuiting the absolute chain - before the
+   `MATH_KEYWORDS` check is ever reached, so "the sum converges" was always
+   scored like any other bare keyword, never claimed absolutely; GOLDENS #2 in
+   `tests/engine/test-render.mjs`
+   (`['We use the sum and product rules', ...]`) predates this commit and
+   already proved it.) The fix adds a `PROSE_COLLIDING_SYMBOLS` set
+   (`disambiguate.ts`) naming the words that need the same carve-out
+   `sum`/`lim` get from `FUNCTIONS` membership: `partial` now falls through to
+   scoring instead of being claimed absolutely, with a new `symbolWord`
+   feature (+2) tuned to keep it reading as math both alone and next to any
+   notation (`partial u`, `partial^2`, `/partial x`), while English on either
+   side still outvotes it. The geometry words with the same collision -
+   `triangle`/`angle`/`parallel`/`degree`/`congruent` ("the triangle
+   inequality", "the parallel postulate") - remain OPEN, and are deliberately
+   NOT in `PROSE_COLLIDING_SYMBOLS`: their math spellings take multi-character
+   point-label operands that themselves score as prose (`angle ABC`,
+   `triangle PQR`), so scoring them the same way would trade one silent wrong
+   answer for another. They need point-label support first.
 
 ## Notes for later tasks
 

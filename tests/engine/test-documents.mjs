@@ -84,6 +84,10 @@ Problem 1 Epsilon-delta {
     }
     QED
   }
+
+  Remark {
+    lim(x -> 0^+) 1/x = inf and lim(x -> 0^-) 1/x = -inf, so the limit does not exist
+  }
 }
 
 Problem 2 Series and the ratio test {

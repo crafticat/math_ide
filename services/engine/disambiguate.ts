@@ -42,7 +42,7 @@ type Feature =
   | 'singleLetter' | 'indexedVar' | 'bareKeyword' | 'unknownMultiChar'
   | 'neighborProse' | 'neighborMathy' | 'commaBefore' | 'quantifierContext'
   | 'articleA' | 'binderBefore' | 'inMembership' | 'inProse'
-  | 'proseSentence' | 'formulaSentence';
+  | 'proseSentence' | 'formulaSentence' | 'symbolWord';
 
 // Positive pulls toward math, negative toward prose. Retuning the classifier
 // means editing these numbers and nothing else.
@@ -63,6 +63,9 @@ export const WEIGHTS: Record<Feature, number> = {
   inProse: -3,            // "included in the set" - the English preposition
   proseSentence: -5,      // and/or/not inside a sentence that contains English words
   formulaSentence: 2,     // and/or/not inside a statement with no English at all
+  symbolWord: 2,          // a PROSE_COLLIDING_SYMBOLS name (`partial`): enough that the word
+                          //   ALONE (`partial`) or beside any notation still reads as its
+                          //   symbol, and little enough that English on either side outvotes it
 };
 
 // Absolutes do not score; they get a finite sentinel so DecisionRecord.score
@@ -74,6 +77,27 @@ const ABSOLUTE_SCORE = 100;
 // Words that appear in a math table but are ALSO ordinary English, so they can
 // never be decided by vocabulary alone.
 const AMBIGUOUS = new Set(['and', 'or', 'not', 'in', 'a', 'A']);
+
+// Math-table words that are ALSO ordinary English adjectives/nouns, so table
+// membership alone must not settle them - the same judgement the BARE-CALLABLE
+// carve-out makes for `sum`/`lim` (which reach scoring only because they are
+// FUNCTIONS names; these are not, so they need naming here).
+//
+// `partial` is the live case: "the partial sums stay bounded", "the partial
+// order on S", "we compute the partial fraction decomposition" are ordinary
+// analysis/algebra prose, and an absolute verdict printed a ∂ into the middle
+// of the sentence (`\text{the }\partial\text{ sums stay bounded}`) with no
+// diagnostic. Scoring reads the neighbourhood instead, which is decisive in
+// both directions: every PDE spelling puts notation next to it (`partial u`,
+// `partial^2`, `/partial x`, `= partial`), and every prose use puts English
+// there.
+//
+// The geometry keywords `triangle`/`angle`/`parallel`/`degree`/`congruent`
+// have the same collision ("the triangle inequality", "the parallel
+// postulate") but are NOT listed: their math spellings take multi-char
+// operands that score as prose (`angle ABC`, `triangle PQR`), so scoring would
+// trade one silent error for another. They need point-label support first.
+const PROSE_COLLIDING_SYMBOLS = new Set(['partial']);
 
 // The subset whose reading is a property of the whole sentence rather than of
 // its immediate neighbours: `Let a and b be reals` (English) vs `p and q => r`
@@ -337,6 +361,10 @@ function absoluteOf(tokens: Token[], i: number, facts: ParenFacts): { verdict: V
   // often as they are math ("we use the sum and product rules"), so they are
   // scored (bareKeyword) instead of being math by keyword membership.
   if (FUNCTIONS[w] !== undefined) return null;
+  // Same carve-out, for table words that are not FUNCTIONS names (see
+  // PROSE_COLLIDING_SYMBOLS). Must precede the GREEK check: `partial` is in
+  // BOTH tables and the greek-letter absolute is what used to claim it.
+  if (PROSE_COLLIDING_SYMBOLS.has(w)) return null;
   if (GREEK[w] !== undefined) return { verdict: 'math', reason: 'absolute: greek letter' };
   if (MATH_KEYWORDS.has(w)) return { verdict: 'math', reason: 'absolute: math keyword' };
   if (SYMBOL_MAP[w] !== undefined) return { verdict: 'math', reason: 'absolute: math symbol' };
@@ -358,6 +386,9 @@ function staticClassOf(tokens: Token[], i: number, facts: ParenFacts): StaticCla
   if (abs) return abs.verdict;
   const w = t.text;
   if (AMBIGUOUS.has(w) || isSingleLetter(w) || isIndexedVar(w) || FUNCTIONS[w] !== undefined) return 'ambiguous';
+  // Not 'prose': these are scored, but they are still symbols, so they must
+  // neither vouch as English for a neighbour nor set the statement's hasProse.
+  if (PROSE_COLLIDING_SYMBOLS.has(w)) return 'ambiguous';
   return 'prose';
 }
 
@@ -494,6 +525,7 @@ function scoreWord(ctx: Context, i: number): { score: number; reasons: string[] 
   if (isSingleLetter(w)) fire('singleLetter');
   else if (isIndexedVar(w)) fire('indexedVar');
   else if (FUNCTIONS[w] !== undefined && !VERB_FUNCTIONS.has(w)) fire('bareKeyword');
+  else if (PROSE_COLLIDING_SYMBOLS.has(w)) fire('symbolWord');
   else if (!isMathTableWord(w) && !AMBIGUOUS.has(w)) fire('unknownMultiChar');
 
   // -- neighbourhood features --
