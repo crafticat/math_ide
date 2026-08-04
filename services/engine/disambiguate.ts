@@ -160,12 +160,20 @@ const isMathTableWord = (w: string): boolean => GREEK[w] !== undefined || MATH_K
 const isAttaching = (t: Token): boolean => t.kind === 'PUNCT' || (t.kind === 'OP' && ATTACHING_OPS.has(t.text));
 
 // ---- Per-statement context, computed once ----
-interface Context {
+
+/** The bracket facts the CONTEXT ABSOLUTES read (absoluteOf, staticClassOf).
+ *  Split out of Context because buildContext has to compute the static classes
+ *  while it is still building the Context object itself. */
+interface ParenFacts {
+  inCallArgs: boolean[];     // token sits inside the parens of a function call
+  inScriptArgs: boolean[];   // token sits inside a `_(`/`^(` script argument
+  callParens: Set<number>;   // LPAREN/LBRACE indices that open a function call (see computeCallParens)
+}
+
+interface Context extends ParenFacts {
   tokens: Token[];
   classes: StaticClass[];    // static class of every token
-  inCallArgs: boolean[];     // token sits inside the parens of a function call
   matchingParen: number[];   // LPAREN index -> its RPAREN index, else -1
-  callParens: Set<number>;   // LPAREN/LBRACE indices that open a function call (see computeCallParens)
   hasProse: boolean;         // statement contains at least one English-reading word
   hasQuantifier: boolean;    // statement contains forall/exists/suchthat/notin/=>/<=>
 }
@@ -191,7 +199,55 @@ interface Context {
 // 0)` and `no(such x)` are English with a tight parenthesis, not
 // applications - so the vocabulary keeps its say over the one shape where
 // adjacency alone would be wrong.
+//
+// Adjacency alone is not enough for a MULTI-CHAR unknown name, though: plenty
+// of English is typed without the space, and the callee is then an ordinary
+// verb with a parenthetical glued to it - `Note(this is important)`,
+// `we get(assuming x > 0)`. Reading those as applications produced
+// `\mathrm{Note}(\mathrm{this}\mathrm{is}\mathrm{important})`: every word of
+// the remark dragged into math and jammed together. So a multi-char unknown
+// name additionally has to have a MATH-LOOKING argument list (see
+// parenHoldsProse). Single letters and FUNCTIONS names are exempt: `a(n)`,
+// `F'(area)` and `sin (x)` have no competing English reading worth the check.
 const isAdjacent = (a: Token, b: Token): boolean => a.span.endLine === b.span.startLine && a.span.endCol === b.span.startCol;
+
+// The RPAREN matching the LPAREN at `open`, or -1. A local scan because this
+// runs WHILE the call-paren set is being computed - buildContext's
+// matchingParen does not exist yet.
+function matchingRParen(tokens: Token[], open: number): number {
+  let depth = 0;
+  for (let k = open; k < tokens.length; k++) {
+    if (tokens[k].kind === 'LPAREN') depth++;
+    else if (tokens[k].kind === 'RPAREN' && --depth === 0) return k;
+  }
+  return -1;
+}
+
+// Does the group opened at `open` read as English rather than as an argument
+// list? True as soon as ONE word in it is English on the tables alone: a
+// STOP_WORD, or a multi-character word in no math table. The test is
+// deliberately PURELY LEXICAL - no scoring, no verdicts - because it runs
+// from inside callOpenerOf, which the scorer's own context is built on; a
+// recursive answer here would be a cycle.
+//
+// A word written tight against its own `(` is skipped: it is a nested callee
+// (`Aut(Gal(K))`), not a word of a remark.
+function parenHoldsProse(tokens: Token[], open: number): boolean {
+  const close = matchingRParen(tokens, open);
+  if (close < 0) return false;
+  for (let k = open + 1; k < close; k++) {
+    const t = tokens[k];
+    if (t.kind !== 'WORD') continue;
+    const next = tokens[k + 1];
+    if (next && next.kind === 'LPAREN' && isAdjacent(t, next)) continue;
+    if (STOP_WORDS.has(t.text.toLowerCase())) return true;
+    if (isSingleLetter(t.text) || isIndexedVar(t.text)) continue;
+    if (isMathTableWord(t.text) || FUNCTIONS[t.text] !== undefined) continue;
+    if (isMathPackageMember(tokens, k)) continue;
+    return true;
+  }
+  return false;
+}
 
 function callOpenerOf(tokens: Token[], wordIndex: number): number {
   const w = tokens[wordIndex];
@@ -208,8 +264,11 @@ function callOpenerOf(tokens: Token[], wordIndex: number): number {
   const opener = tokens[k];
   if (!opener) return -1;
   if (!isFunction && !isAdjacent(prev, opener)) return -1;
-  if (opener.kind === 'LPAREN' || (opener.kind === 'LBRACE' && isFunction)) return k;
-  return -1;
+  if (opener.kind === 'LBRACE') return isFunction ? k : -1;
+  if (opener.kind !== 'LPAREN') return -1;
+  // The prose-argument veto, for unknown multi-char names only (see above).
+  if (!isFunction && !isSingleLetter(w.text) && parenHoldsProse(tokens, k)) return -1;
+  return k;
 }
 
 // Precomputed ONCE per statement: every LPAREN/LBRACE index some word's
@@ -238,12 +297,25 @@ const isMathPackageMember = (tokens: Token[], i: number): boolean =>
   !!tokens[i - 2] && tokens[i - 2].kind === 'WORD' && tokens[i - 2].text === 'Math' &&
   !!tokens[i - 1] && tokens[i - 1].kind === 'OP' && tokens[i - 1].text === '.';
 
+const isScriptOp = (t: Token | undefined): boolean =>
+  t !== undefined && t.kind === 'OP' && (t.text === '_' || t.text === '^');
+
 // A word directly after `_` or `^` is a script operand (`x_max`), never prose.
-const isScriptOperand = (tokens: Token[], i: number): boolean =>
-  !!tokens[i - 1] && tokens[i - 1].kind === 'OP' && (tokens[i - 1].text === '_' || tokens[i - 1].text === '^');
+const isScriptOperand = (tokens: Token[], i: number): boolean => isScriptOp(tokens[i - 1]);
+
+// `x_(ij)`, `x^(a+b)`: the PARENTHESIZED spelling of the same script operand.
+// The parens are the script's own grouping - the sub/superscript is what is
+// between them - so their contents are math for exactly the reason `x_max`'s
+// are. Without this the words inside could score prose, and attachParentheticals
+// would then read the group as a remark and hand the whole thing to the
+// surrounding text: `x_(ij)` came out as a SILENT empty subscript,
+// `x_{}\text{(ij)}`, with the `_` left holding nothing and no diagnostic at all.
+const isScriptParen = (tokens: Token[], i: number): boolean =>
+  tokens[i].kind === 'LPAREN' && isScriptOp(tokens[i - 1]);
 
 // Step A. Returns null when the word must be scored.
-function absoluteOf(tokens: Token[], i: number, inCallArgs: boolean[], callParens: Set<number>): { verdict: Verdict; reason: string } | null {
+function absoluteOf(tokens: Token[], i: number, facts: ParenFacts): { verdict: Verdict; reason: string } | null {
+  const { inCallArgs, inScriptArgs, callParens } = facts;
   const w = tokens[i].text;
 
   // Context absolutes first: they outrank vocabulary (`a(x)` is a call even
@@ -253,6 +325,7 @@ function absoluteOf(tokens: Token[], i: number, inCallArgs: boolean[], callParen
   if (inCallArgs[i]) return { verdict: 'math', reason: 'absolute: function argument' };
   if (isMathPackageMember(tokens, i)) return { verdict: 'math', reason: 'absolute: Math.* member' };
   if (isScriptOperand(tokens, i)) return { verdict: 'math', reason: 'absolute: script operand' };
+  if (inScriptArgs[i]) return { verdict: 'math', reason: 'absolute: script argument' };
 
   // Vocabulary absolutes.
   if (AMBIGUOUS.has(w)) return null;
@@ -273,11 +346,11 @@ function absoluteOf(tokens: Token[], i: number, inCallArgs: boolean[], callParen
 // What the tables alone say about a token - used by neighbour features and by
 // the sentence-level prose test. Unknown multi-char words report 'prose' here
 // (that is their leaning) even though they are still scored individually.
-function staticClassOf(tokens: Token[], i: number, inCallArgs: boolean[], callParens: Set<number>): StaticClass {
+function staticClassOf(tokens: Token[], i: number, facts: ParenFacts): StaticClass {
   const t = tokens[i];
   if (t.kind === 'STRING') return 'prose';
   if (t.kind !== 'WORD') return 'math';
-  const abs = absoluteOf(tokens, i, inCallArgs, callParens);
+  const abs = absoluteOf(tokens, i, facts);
   if (abs) return abs.verdict;
   const w = t.text;
   if (AMBIGUOUS.has(w) || isSingleLetter(w) || isIndexedVar(w) || FUNCTIONS[w] !== undefined) return 'ambiguous';
@@ -287,9 +360,12 @@ function staticClassOf(tokens: Token[], i: number, inCallArgs: boolean[], callPa
 function buildContext(tokens: Token[]): Context {
   const n = tokens.length;
   const callParens = computeCallParens(tokens);
+  const scriptParens = new Set<number>();
+  for (let i = 0; i < n; i++) if (isScriptParen(tokens, i)) scriptParens.add(i);
   const inCallArgs = new Array<boolean>(n).fill(false);
+  const inScriptArgs = new Array<boolean>(n).fill(false);
   const matchingParen = new Array<number>(n).fill(-1);
-  const stack: { index: number; kind: 'LPAREN' | 'LBRACE'; isCall: boolean }[] = [];
+  const stack: { index: number; kind: 'LPAREN' | 'LBRACE'; isCall: boolean; isScriptArg: boolean }[] = [];
   for (let i = 0; i < n; i++) {
     const t = tokens[i];
     if (t.kind === 'LPAREN' || t.kind === 'LBRACE') {
@@ -298,8 +374,15 @@ function buildContext(tokens: Token[]): Context {
       // whether the token one back was the opening WORD, which missed `F'(`
       // (the token one back is `'`, not `F`).
       const opensCall = callParens.has(i);
-      // Nested groups inherit: `sin(2*(x+1))` is all argument.
-      stack.push({ index: i, kind: t.kind, isCall: opensCall || (stack.length > 0 && stack[stack.length - 1].isCall) });
+      const top = stack[stack.length - 1];
+      // Nested groups inherit: `sin(2*(x+1))` is all argument, and everything
+      // under `x^(...)` is all script argument.
+      stack.push({
+        index: i,
+        kind: t.kind,
+        isCall: opensCall || (top !== undefined && top.isCall),
+        isScriptArg: scriptParens.has(i) || (top !== undefined && top.isScriptArg),
+      });
     } else if (t.kind === 'RPAREN' || t.kind === 'RBRACE') {
       // A closer that does not match the open frame is left unpaired rather
       // than popping someone else's frame (recovery on malformed input).
@@ -308,12 +391,15 @@ function buildContext(tokens: Token[]): Context {
         stack.pop();
         if (t.kind === 'RPAREN') matchingParen[open.index] = i;
       }
-    } else if (stack.length > 0 && stack[stack.length - 1].isCall) {
-      inCallArgs[i] = true;
+    } else if (stack.length > 0) {
+      const top = stack[stack.length - 1];
+      if (top.isCall) inCallArgs[i] = true;
+      if (top.isScriptArg) inScriptArgs[i] = true;
     }
   }
 
-  const classes = tokens.map((_, i) => staticClassOf(tokens, i, inCallArgs, callParens));
+  const facts: ParenFacts = { inCallArgs, inScriptArgs, callParens };
+  const classes = tokens.map((_, i) => staticClassOf(tokens, i, facts));
   // A statement-INITIAL discourse marker ("Then p and q => r") does not count
   // as the sentence's own prose evidence - only the very first word-token is
   // ever exempt, so "Hence a and b are nonzero" still reads as prose (the
@@ -326,7 +412,7 @@ function buildContext(tokens: Token[]): Context {
   });
   const hasQuantifier = tokens.some((t) =>
     (t.kind === 'WORD' && QUANTIFIER_WORDS.has(t.text)) || (t.kind === 'OP' && QUANTIFIER_OPS.has(t.text)));
-  return { tokens, classes, inCallArgs, matchingParen, callParens, hasProse, hasQuantifier };
+  return { tokens, classes, ...facts, matchingParen, hasProse, hasQuantifier };
 }
 
 // ---- Neighbour helpers ----
@@ -496,7 +582,10 @@ function scoreWord(ctx: Context, i: number): { score: number; reasons: string[] 
 // word count breaks the remaining ties toward the English reading, which is
 // the one that keeps more of the source readable when it is wrong.
 // Call parens are exempt: absoluteOf already made every word inside them
-// math, and an argument list is never a remark.
+// math, and an argument list is never a remark. Script parens (`x_(ij)`) need
+// no exemption of their own for the same reason - inScriptArgs makes every
+// word inside them math too, so the prose count below is zero and the group is
+// skipped on the next line.
 function attachParentheticals(ctx: Context, verdicts: Verdict[], recordAt: (DecisionRecord | null)[]): void {
   const { tokens, matchingParen, callParens } = ctx;
   const setVerdict = (k: number, verdict: Verdict, reason: string): void => {
@@ -521,7 +610,12 @@ function attachParentheticals(ctx: Context, verdicts: Verdict[], recordAt: (Deci
       for (let k = open; k <= close; k++) setVerdict(k, 'prose', 'parenthetical: joined the surrounding prose');
     } else {
       for (let k = open + 1; k < close; k++) {
-        if (verdicts[k] === 'prose') setVerdict(k, 'math', 'kept inside its math group');
+        // The `parenthetical:` prefix is part of the reason grammar, not
+        // decoration: every reason is either `<feature>(<weight>)` or one of
+        // the `absolute:`/`parenthetical:`/`default:` prefixes, and the suite's
+        // reason invariant enforces exactly that. This branch had no test
+        // reaching it and so had been quietly emitting a bare string.
+        if (verdicts[k] === 'prose') setVerdict(k, 'math', 'parenthetical: kept inside its math group');
       }
     }
   }
@@ -584,7 +678,7 @@ export function segment(tokens: Token[], diagnostics: Diagnostic[]): { runs: Run
       verdicts[i] = t.kind === 'STRING' ? 'prose' : 'math';
       continue;
     }
-    const abs = absoluteOf(tokens, i, ctx.inCallArgs, ctx.callParens);
+    const abs = absoluteOf(tokens, i, ctx);
     let record: DecisionRecord;
     if (abs) {
       record = { word: t.text, span: t.span, verdict: abs.verdict, score: abs.verdict === 'math' ? ABSOLUTE_SCORE : -ABSOLUTE_SCORE, reasons: [abs.reason] };

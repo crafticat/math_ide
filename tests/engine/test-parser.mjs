@@ -86,7 +86,13 @@ function shape(e) {
     case 'AngleVector': return `AngleVector([${e.elements.map(shape).join(',')}])`;
     case 'Group': return e.bracket === '[' ? `Group[${shape(e.operand)}]` : `Group(${shape(e.operand)})`;
     case 'Matrix': return `Matrix(${e.env},[${e.rows.map((r) => `[${r.map(shape).join(',')}]`).join(',')}])`;
-    case 'Cases': return `Cases([${e.branches.map((b) => `{value:${shape(b.value)},cond:${shape(b.condition)}}`).join(',')}])`;
+    // `otherwise` is printed because it is a THIRD state, not a synonym for
+    // "no condition": a branch can end in the literal word (`-x otherwise`, so
+    // the renderer prints an `& \text{otherwise}` column), or simply have no
+    // condition at all (`cases { x = 0; y = 1 }` - a braced system of
+    // equations, where printing "otherwise" would invent a condition the
+    // source never wrote). Serializing only `cond` collapsed the two.
+    case 'Cases': return `Cases([${e.branches.map((b) => `{value:${shape(b.value)},cond:${shape(b.condition)}${b.otherwise ? ',otherwise' : ''}}`).join(',')}])`;
     case 'Relation': return `Relation([${e.ops.join(',')}],[${e.operands.map(shape).join(',')}])`;
     default: return `UNKNOWN(${e && e.kind})`;
   }
@@ -205,7 +211,21 @@ const CASES = [
     src: 'f(x) = cases { x^2 if x >= 0; -x otherwise }',
     want:
       'Relation([=],[Call(f,[Var(x)]),Cases([{value:Pow(Var(x),Num(2)),cond:Relation([>=],[Var(x),Num(0)])},' +
-      '{value:UnaryOp(neg,Var(x)),cond:null}])])',
+      '{value:UnaryOp(neg,Var(x)),cond:null,otherwise}])])',
+  },
+  {
+    n: 14.1,
+    src: 'cases { x = 0; y = 1 }',
+    want:
+      'Cases([{value:Relation([=],[Var(x),Num(0)]),cond:null},' +
+      '{value:Relation([=],[Var(y),Num(1)]),cond:null}])',
+    note: 'a braced system of equations - NO branch may be flagged `otherwise`, or the renderer states a condition the source never wrote',
+  },
+  {
+    n: 14.2,
+    src: 'cases { x if y; z otherwise }',
+    want: 'Cases([{value:Var(x),cond:Var(y)},{value:Var(z),cond:null,otherwise}])',
+    note: 'only the branch that ends in the literal word carries the flag',
   },
   { n: 15, src: 'det(matrix([[a,b],[c,d]]))', want: 'Call(det,[Matrix(pmatrix,[[Var(a),Var(b)],[Var(c),Var(d)]])])' },
   { n: 16, src: 'Math.reals union Math.naturals', want: 'BinOp(cup,Sym(Math.reals),Sym(Math.naturals))' },
@@ -450,6 +470,41 @@ for (const [src, want] of EXTRA) {
   check('Recovery', 'continuation line root is Relation([=]) with an empty-Raw left operand',
     expr.kind === 'Relation' && expr.ops.join() === '=' && expr.operands[0].kind === 'Raw' && expr.operands[0].text === '', shape(expr));
   check('Recovery', 'continuation line has no non-empty Raw fragments', !walk(expr).some((nd) => nd.kind === 'Raw' && nd.text !== ''), shape(expr));
+}
+
+// `proseFollows`: a math run that ENDS on an infix operator is complete input
+// when the operand it is reaching for is the PROSE run next door. `aRb => bRa`
+// segments as prose / `=>` / prose, so the run handed to the parser is that
+// one operator with BOTH its operands outside it - the mirror image of the
+// leading-operator continuation idiom (`= f(x)`), which was already silent.
+// Only the renderer knows what comes next, so it passes the flag; without it
+// the reader got a "missing operand" warning on perfectly ordinary prose.
+{
+  const { tokens } = lex('aRb =>');
+  const runTokens = tokens.filter((t) => t.kind !== 'NEWLINE' && t.kind !== 'COMMENT');
+  const withProse = [];
+  const withoutProse = [];
+  const exprWith = parseExpression(runTokens, withProse, true);
+  const exprWithout = parseExpression(runTokens, withoutProse, false);
+  check('ProseFollows', '"aRb =>" with prose next door - no diagnostic', withProse.length === 0,
+    withProse.map((d) => d.message).join(' | '));
+  check('ProseFollows', '"aRb =>" with prose next door - still parses as the implication, right operand empty',
+    shape(exprWith) === 'Relation([=>],[Ident(aRb),Raw("")])', shape(exprWith));
+  check('ProseFollows', '"aRb =>" with NOTHING after it - still reports the missing operand',
+    withoutProse.length === 1 && withoutProse[0].message.includes('missing operand'),
+    withoutProse.map((d) => d.message).join(' | ') || '(no diagnostics)');
+  check('ProseFollows', '"aRb =>" shape is the same either way (the flag silences, it does not re-parse)',
+    shape(exprWith) === shape(exprWithout), `${shape(exprWith)} vs ${shape(exprWithout)}`);
+}
+{
+  // The flag is narrow on purpose: it only excuses an operand missing at the
+  // very END of the run. An operand missing INSIDE brackets still reports,
+  // prose next door or not.
+  const diagnostics = [];
+  const { tokens } = lex('x + (y *)');
+  parseExpression(tokens.filter((t) => t.kind !== 'NEWLINE' && t.kind !== 'COMMENT'), diagnostics, true);
+  check('ProseFollows', '"x + (y *)" - proseFollows does not excuse an operand missing inside brackets',
+    diagnostics.length > 0, '(no diagnostics)');
 }
 
 // MATH_QUOTE spans must land inside the quote's own source extent, not at col 0.

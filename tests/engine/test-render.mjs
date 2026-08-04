@@ -440,6 +440,29 @@ checkExact('Math', 'unknown name tight against "(" is a call',
 checkExact('Math', 'the same name with a space before "(" stays prose',
   render('y = unknownfn (x)').latex, String.raw`y=\text{ unknownfn }(x)`);
 
+// Script typography: an index is not a name. Out in the open a multi-letter
+// run is a name and gets \mathrm; inside a Sub/Pow argument an unknown
+// ALL-LOWERCASE one is a pair of juxtaposed indices and stays bare (italic).
+// Anything with a capital in it is still a label, and known operator names
+// (which the parser hands over as Sym, not Ident) are untouched either way.
+const SCRIPT_CASES = [
+  ['a_ij', String.raw`a_{ij}`],
+  ['a_(ij)', String.raw`a_{ij}`],          // the parenthesized spelling agrees
+  ['x^(ij)', String.raw`x^{ij}`],
+  ['P_AB', String.raw`P_{\mathrm{AB}}`],   // a capital means a label, not indices
+  ['x_max', String.raw`x_{max}`],          // MATH_KEYWORDS -> Sym, unchanged
+  ['A_det', String.raw`A_{det}`],
+  ['speed = 1', String.raw`\mathrm{speed}=1`],  // out of a script, still \mathrm
+];
+for (const [source, want] of SCRIPT_CASES) {
+  checkExact('Scripts', JSON.stringify(source), renderMath(source), want);
+}
+// The same input through the WHOLE pipeline, disambiguator included: a `_(...)`
+// group that leaves the math run takes the subscript's only operand with it,
+// and the `_` then renders as a silent empty script (`a_{}\text{(ij) }=0`).
+checkExact('Scripts', 'a_(ij) = 0 - end to end, the script argument never leaves the math run',
+  render('a_(ij) = 0').latex, String.raw`a_{ij}=0`);
+
 // ============================================
 // Robustness - renderStatement must never throw
 // ============================================

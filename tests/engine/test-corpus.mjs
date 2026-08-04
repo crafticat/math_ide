@@ -28,10 +28,13 @@
  *     case is still held to KaTeX validity. NO case carries the flag today:
  *     all 175 compile clean, and that is itself part of the gate.
  *
- * KaTeX is not a repo dependency (the app loads it from a CDN), so it is
- * resolved from outside the repo: $MATHBRAIN_KATEX_DIR, the dev scratchpad, or
- * repo node_modules if it ever gains one. If none resolve, the KaTeX group is
- * reported SKIPPED (loudly) and the rest of the suite still runs.
+ * KaTeX is a devDependency of this repo (the APP still loads it from a CDN;
+ * the pin here exists so this gate can run), and it is a GATE, not an optional
+ * extra: it resolves from $MATHBRAIN_KATEX_DIR - the escape hatch for a
+ * pinned install kept outside the repo - and otherwise from the repo's own
+ * node_modules. If neither resolves the suite FAILS. There is deliberately no
+ * skip path: a run that could not check LaTeX validity has not run this gate,
+ * and reporting it green would be a lie.
  *
  * Run with: node tests/engine/test-corpus.mjs
  */
@@ -160,8 +163,7 @@ export const CORPUS = [
 
   // === SUBSCRIPTS (83-87) ===
   { id: 83, category: 'Subscripts', input: 'x_i', expected: 'x_{i}' },
-  { id: 84, category: 'Subscripts', input: 'a_ij', latex: 'a_{\\mathrm{ij}}', class: 5,
-    why: 'multi-char identifiers are \\mathrm; in an index position that reads upright, which is the price of the one uniform rule' },
+  { id: 84, category: 'Subscripts', input: 'a_ij', expected: 'a_{ij}' },
   { id: 85, category: 'Subscripts', input: 'x_1 + x_2', contains: 'x_{1}' },
   { id: 86, category: 'Subscripts', input: 'a_n/b_n', contains: 'a_{n}' },
   { id: 87, category: 'Subscripts', input: 'sum(i=1 -> n) x_i^2', contains: 'x_{i}' },
@@ -307,18 +309,15 @@ export const CORPUS = [
 
 const GREEN = '\x1b[32m';
 const RED = '\x1b[31m';
-const YELLOW = '\x1b[33m';
-const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
 
-const SCRATCHPAD_KATEX =
-  '/private/tmp/claude-501/-Users-crafti-PycharmProjects-math-ide/ba25c301-43d6-4af7-845a-3b0425934a77/scratchpad/node_modules';
-
-/** KaTeX, or null when no install can be found (see the header note). */
+/**
+ * KaTeX, from $MATHBRAIN_KATEX_DIR or the repo's own node_modules.
+ * THROWS when neither resolves - see the header: this check is a gate.
+ */
 function loadKatex() {
   const dirs = [
     process.env.MATHBRAIN_KATEX_DIR,
-    SCRATCHPAD_KATEX,
     new URL('../../node_modules', import.meta.url).pathname,
   ].filter(Boolean);
   for (const dir of dirs) {
@@ -330,7 +329,11 @@ function loadKatex() {
       /* try the next candidate */
     }
   }
-  return null;
+  throw new Error(
+    'KaTeX not found — the corpus cannot check that its output is valid LaTeX.\n' +
+    `  looked in: ${dirs.join('\n             ')}\n` +
+    '  fix: run `npm install` (katex is a devDependency), or point\n' +
+    '       $MATHBRAIN_KATEX_DIR at a node_modules directory containing it.');
 }
 
 async function main() {
@@ -340,10 +343,6 @@ async function main() {
 
   const { compile } = await import(bundle('services/engine/engine.ts', 'engine-corpus.mjs'));
   const katex = loadKatex();
-  if (!katex) {
-    console.log(`${YELLOW}! KaTeX not found - validity checks SKIPPED.${RESET}`);
-    console.log(`${DIM}  Set MATHBRAIN_KATEX_DIR to a node_modules containing katex to enable them.${RESET}\n`);
-  }
 
   let passed = 0;
   let failed = 0;
@@ -394,19 +393,18 @@ async function main() {
       check(tc, `#${tc.id} no diagnostics`, result.diagnostics.length === 0, diagnostics);
     }
 
-    // 3. KaTeX validity - every rendered line, always.
-    if (katex) {
-      for (const line of result.latexLines) {
-        katexChecked++;
-        let error = null;
-        try {
-          const html = katex.renderToString(line.latex, { throwOnError: true, strict: false, trust: true });
-          if (html.includes('katex-error')) error = 'katex-error span in output';
-        } catch (e) {
-          error = e.message;
-        }
-        check(tc, `#${tc.id} katex`, error === null, `${error}\n      latex: ${line.latex}`);
+    // 3. KaTeX validity - every rendered line, always (loadKatex threw if it
+    //    could not be resolved, so there is no "no katex" branch here).
+    for (const line of result.latexLines) {
+      katexChecked++;
+      let error = null;
+      try {
+        const html = katex.renderToString(line.latex, { throwOnError: true, strict: false, trust: true });
+        if (html.includes('katex-error')) error = 'katex-error span in output';
+      } catch (e) {
+        error = e.message;
       }
+      check(tc, `#${tc.id} katex`, error === null, `${error}\n      latex: ${line.latex}`);
     }
   }
 
@@ -421,7 +419,7 @@ async function main() {
   const frozen = CORPUS.filter((c) => c.latex !== undefined).length;
   console.log('\n' + '═'.repeat(60));
   console.log(`Corpus: ${CORPUS.length} inputs (${CORPUS.length - frozen} legacy goldens kept, ${frozen} frozen v2 goldens)`);
-  console.log(`KaTeX:  ${katex ? `${katexChecked} rendered lines validated` : 'SKIPPED (no install found)'}`);
+  console.log(`KaTeX:  ${katexChecked} rendered lines validated`);
   console.log(`Total:  ${passed}/${passed + failed} checks passed`);
 
   if (failed > 0) {

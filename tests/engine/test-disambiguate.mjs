@@ -358,6 +358,32 @@ for (const [src, wantKinds] of [
     runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
 }
 
+// The other half of call-form-by-adjacency: plenty of English is typed with no
+// space before its parenthetical, so an unknown MULTI-CHAR name also has to
+// have a math-looking argument list. Without this, `Note(this is important)`
+// became `\mathrm{Note}(\mathrm{this}\mathrm{is}\mathrm{important})` - the
+// whole remark dragged into math and jammed together.
+{
+  const r = run('Note(this is important)');
+  check('Runs', '"Note(this is important)" - an English argument list means the word was a verb, not a callee (single prose run)',
+    r.runs.length === 1 && r.runs[0].kind === 'prose', r.runs.map((x) => `[${x.kind} ${textOf(x)}]`).join(''));
+  checkInvariants('Invariants', '"Note(this is important)"', r);
+}
+{
+  const r = run('we get(assuming x > 0)');
+  const get = r.explain.find((x) => x.word === 'get');
+  check('Runs', '"we get(assuming x > 0)" - a prose word in the group is enough; `get` is not a callee',
+    !!get && get.verdict === 'prose', JSON.stringify(r.explain.map((x) => [x.word, x.verdict])));
+}
+{
+  // The guard must not fire on the calls it was written around: an interior of
+  // single letters is an argument list, and a single-letter callee (`F'(area)`,
+  // `a(n)` above) is exempt from the interior test entirely.
+  const r = run('Aut(G) union Im(f) = Var(X)');
+  check('Runs', '"Aut(G) union Im(f) = Var(X)" - single-letter arguments keep every unknown name a call (single math run)',
+    r.runs.length === 1 && r.runs[0].kind === 'math', r.runs.map((x) => `[${x.kind} ${textOf(x)}]`).join(''));
+}
+
 // Punctuation attachment: a comma between two prose words stays in the prose
 // run; a comma between numbers stays math; a trailing period follows its
 // sentence.
@@ -435,6 +461,74 @@ for (const [src, wantKinds] of [
 {
   const r = run('x_max + x1 = 2');
   check('Extra', '"x_max + x1 = 2" - subscript word and indexed variable stay math',
+    r.runs.length === 1 && r.runs[0].kind === 'math', r.runs.map((x) => `[${x.kind} ${textOf(x)}]`).join(''));
+}
+{
+  // The PARENTHESIZED script argument is the same operand, so it is math too.
+  // When it was not, attachParentheticals pulled `(ij)` out into the prose and
+  // the parser got a `_` with nothing after it - `x_{}\text{(ij)}`, and not one
+  // diagnostic to say so.
+  const r = run('a_(ij) = 0');
+  check('Extra', '"a_(ij) = 0" - a `_(...)` script argument is math, parens and all (single math run)',
+    r.runs.length === 1 && r.runs[0].kind === 'math', r.runs.map((x) => `[${x.kind} ${textOf(x)}]`).join(''));
+  checkInvariants('Invariants', '"a_(ij) = 0"', r);
+}
+{
+  const r = run('x^(ij) + y_(nm)');
+  check('Extra', '"x^(ij) + y_(nm)" - superscript and subscript arguments both stay math',
+    r.runs.length === 1 && r.runs[0].kind === 'math', r.runs.map((x) => `[${x.kind} ${textOf(x)}]`).join(''));
+}
+
+// ============================================
+// The `(...)` group never straddles a run boundary
+// ============================================
+// A group holding English goes prose IN FULL, parens included; a group that
+// also holds arithmetic stays math and the odd unknown word joins it. Either
+// way the bracket and its partner are in ONE run - a boundary between them
+// strands the bracket in a math run of its own, where it can only parse as Raw
+// (`x = 5 (by Lemma 3)` used to render its parens as two \texttt error spans).
+{
+  const r = run('x = 5 (by Lemma 3)');
+  const parens = r.runs.filter((x) => x.kind === 'prose').flatMap((x) => x.tokens).filter((t) => t.text === '(' || t.text === ')');
+  check('Parens', '"x = 5 (by Lemma 3)" - the remark takes its own parens into the prose run',
+    kindsOf(r.runs).join(' ') === 'math prose' && parens.length === 2,
+    r.runs.map((x) => `[${x.kind} ${textOf(x)}]`).join(''));
+  checkInvariants('Invariants', '"x = 5 (by Lemma 3)"', r);
+}
+{
+  // The OTHER branch, and the one that pins the carve-out as a CARVE-OUT
+  // rather than "always prose": arithmetic inside the group wins the tie, so
+  // the English words join the math instead of dragging the group out of it.
+  // (`where`/`is` have to be STOP_WORDS for this to be reachable at all - an
+  // unknown word like `rules` in `(x + rules + 1)` already scores math off its
+  // arithmetic neighbours and never gets counted as prose here.)
+  const r = run('x = (a + b where b is fixed)');
+  const flipped = ['where', 'is', 'fixed'].map((w) => r.explain.find((x) => x.word === w));
+  check('Parens', '"x = (a + b where b is fixed)" - arithmetic keeps the group math and pulls the English in',
+    r.runs.length === 1 && r.runs[0].kind === 'math' && flipped.every((x) => !!x && x.verdict === 'math'),
+    r.runs.map((x) => `[${x.kind} ${textOf(x)}]`).join(''));
+  checkInvariants('Invariants', '"x = (a + b where b is fixed)"', r);
+}
+{
+  const r = run('f(x) (x > 0)');
+  check('Parens', '"f(x) (x > 0)" - a spaced group of pure math is not a remark (single math run)',
+    r.runs.length === 1 && r.runs[0].kind === 'math', r.runs.map((x) => `[${x.kind} ${textOf(x)}]`).join(''));
+}
+
+// ============================================
+// Postfix `!` attaches like the other punctuation-shaped operators
+// ============================================
+// `!` is the factorial operator next to mathematics and an exclamation mark
+// next to English, which is exactly what ATTACHING_OPS asks of `.`/`,`/`;`/`:`.
+{
+  const r = run('that is amazing!');
+  check('Punctuation', '"that is amazing!" - a trailing `!` after English joins the sentence (single prose run)',
+    r.runs.length === 1 && r.runs[0].kind === 'prose', r.runs.map((x) => `[${x.kind} ${textOf(x)}]`).join(''));
+  checkInvariants('Invariants', '"that is amazing!"', r);
+}
+{
+  const r = run('(j-1)! + 1');
+  check('Punctuation', '"(j-1)! + 1" - a `!` between math stays math (single math run)',
     r.runs.length === 1 && r.runs[0].kind === 'math', r.runs.map((x) => `[${x.kind} ${textOf(x)}]`).join(''));
 }
 

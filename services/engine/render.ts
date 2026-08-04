@@ -55,7 +55,7 @@ import type { Token, Diagnostic, Expr, Span, Block, DocumentAst, EngineLine } fr
 import type { StatementTokens } from './document';
 import { segment } from './disambiguate';
 import { parseExpression } from './parser';
-import { FUNCTIONS, SYMBOL_MAP } from './language';
+import { FUNCTIONS, MATH_KEYWORDS, SYMBOL_MAP } from './language';
 
 // ---- Public API ----
 
@@ -83,7 +83,30 @@ interface Ctx {
   // Inside a \cfrac tower: every Frac below the tower's root renders \cfrac
   // too, so the whole continued fraction keeps one consistent size.
   cfrac: boolean;
+  // Inside the ARGUMENT of a Sub/Pow (`a_<here>`, `x^<here>`). An index is not
+  // a name: see isBareIndex.
+  inScript: boolean;
 }
+
+// Typography of a multi-char identifier sitting in a script position.
+//
+// Out in the open, `\mathrm` is right: a multi-letter run is a NAME (`Aut`,
+// `speed`), and an italic name reads as a product of its letters. In an index
+// it is the other way round - `a_ij` is the (i,j) entry of a matrix, two
+// juxtaposed single-letter indices, and `a_{\mathrm{ij}}` prints them upright
+// as though "ij" were a word. So an unknown ALL-LOWERCASE identifier renders
+// bare (italic) once it is inside a script, and everything else keeps
+// \mathrm: a capital anywhere (`P_AB`, `T_Max`) is a label, not an index pair.
+//
+// Known operator names are unaffected in practice as well as by this test:
+// `max`, `min`, `det` and the rest of MATH_KEYWORDS/FUNCTIONS never reach here
+// at all - the parser turns them into Sym/Call nodes, not Ident - and they are
+// named in the guard anyway so the policy survives that ceasing to be true.
+const isBareIndex = (name: string): boolean =>
+  /^[a-z]+$/.test(name) && !MATH_KEYWORDS.has(name) && FUNCTIONS[name] === undefined;
+
+/** ctx for the ARGUMENT of a script (not for its base - see scriptBase). */
+const scriptArg = (ctx: Ctx): Ctx => (ctx.inScript ? ctx : { ...ctx, inScript: true });
 
 // ================= symbol / operator tables =================
 
@@ -258,7 +281,7 @@ const ROW_SEP = '\\\\ ';
  * span matches it exactly in \htmlClass{hl-node}{...}.
  */
 export function renderExpr(expr: Expr, highlight?: HighlightSpec): string {
-  return render(expr, { highlight, inSetBuilderCond: false, cfrac: false });
+  return render(expr, { highlight, inSetBuilderCond: false, cfrac: false, inScript: false });
 }
 
 function render(e: Expr, ctx: Ctx): string {
@@ -287,7 +310,9 @@ function renderNode(e: Expr, ctx: Ctx): string {
     case 'Var':
       return e.name;
     case 'Ident':
-      return `\\mathrm{${escapeLatex(e.name)}}`;
+      return ctx.inScript && isBareIndex(e.name)
+        ? escapeLatex(e.name)
+        : `\\mathrm{${escapeLatex(e.name)}}`;
     case 'Sym':
       // NOTE: SYMBOL_MAP still carries the legacy compiler's layout prefix on
       // QED (`\quad \blacksquare`). Layout is the renderer's business, not the
@@ -308,9 +333,9 @@ function renderNode(e: Expr, ctx: Ctx): string {
     case 'Frac':
       return renderFrac(e, ctx);
     case 'Pow':
-      return `${scriptBase(e.base, ctx, 'Pow')}^{${render(e.exp, ctx)}}`;
+      return `${scriptBase(e.base, ctx, 'Pow')}^{${render(e.exp, scriptArg(ctx))}}`;
     case 'Sub':
-      return `${scriptBase(e.base, ctx, 'Sub')}_{${render(e.sub, ctx)}}`;
+      return `${scriptBase(e.base, ctx, 'Sub')}_{${render(e.sub, scriptArg(ctx))}}`;
     case 'Call':
       return renderCall(e, ctx, '');
     case 'BigOp':
