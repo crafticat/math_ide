@@ -620,7 +620,9 @@ class Parser {
     const span = this.spanOf(start, close + 1);
     this.pos = close + 1;
 
-    if (from >= to) return { kind: 'Sym', name: 'emptyset', latex: '\\emptyset', span };
+    // latex is SYMBOL_MAP's entry, not a literal here, so this glyph has one
+    // source of truth (render.ts's empty-SetLiteral branch notes the same).
+    if (from >= to) return { kind: 'Sym', name: 'emptyset', latex: SYMBOL_MAP.emptyset, span };
 
     const colon = this.findTop(from, to, (t) => this.isOp(t, ':'));
     const pipes = this.findAllTop(from, to, (t) => this.isOp(t, '|'));

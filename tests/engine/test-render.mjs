@@ -76,10 +76,12 @@ check('Bundle', 'renderer bundled output file exists on disk', existsSync(new UR
 const { lex } = await import(lexerUrl);
 const { parseDocument } = await import(documentUrl);
 const { parseExpression } = await import(parserUrl);
-const { renderExpr, renderStatement, renderDocument } = await import(renderUrl);
+const { renderExpr, renderStatement, renderDocument, parseStatement, renderSegments } = await import(renderUrl);
 check('Bundle', 'module exports renderExpr()', typeof renderExpr === 'function');
 check('Bundle', 'module exports renderStatement()', typeof renderStatement === 'function');
 check('Bundle', 'module exports renderDocument()', typeof renderDocument === 'function');
+check('Bundle', 'module exports parseStatement()', typeof parseStatement === 'function');
+check('Bundle', 'module exports renderSegments()', typeof renderSegments === 'function');
 
 // ============================================
 // Helpers
@@ -363,6 +365,15 @@ const EXPR_CASES = [
   ['x^(1/n)', String.raw`x^{\frac{1}{n}}`],
   ['a_i^2', String.raw`a_{i}^{2}`],
   ['(1+x)^n', String.raw`(1+x)^{n}`],
+  // left-nested script chains: a parenthesized script arg closes off the
+  // right-assoc chain (see parser.ts's header), so `x^(a)^(b)` parses as
+  // Pow(Pow(x,a),b) - base is itself a Pow. The base must be braced or KaTeX
+  // raises "Double superscript"/"Double subscript" on the bare `x^{a}^{b}`
+  // juxtaposition (spec-review fix 1). A DIFFERENT kind of script stacked on
+  // top (`a_i^2` above) is unaffected: KaTeX accepts sub-then-sup bare.
+  ['x^(a)^(b)', String.raw`{x^{a}}^{b}`],
+  ['x^(a)^(b)^(c)', String.raw`{{x^{a}}^{b}}^{c}`],
+  ['a_(i)_(j)', String.raw`{a_{i}}_{j}`],
   // differentials
   ['integral(a -> b) f(x) dx', String.raw`\int_{a}^{b} f(x)\,dx`],
   // QED loses SYMBOL_MAP's legacy \quad prefix at the renderer level
@@ -482,6 +493,32 @@ for (const source of ROBUST) {
   const { diagnostics } = renderDoc('Problem 1 {\n  x^2 + sqrt(\n}');
   check('Diagnostics', 'renderDocument accumulates statement diagnostics',
     diagnostics.some((d) => d.message.includes('could not parse')), JSON.stringify(diagnostics.map((d) => d.message)));
+}
+
+// parseStatement/renderSegments must not double-parse (spec-review fix 2):
+// parsing happens exactly once, in parseStatement; renderSegments only
+// walks the already-parsed Expr trees it is handed, so calling it adds no
+// further diagnostics - and renderStatement (the parseStatement+
+// renderSegments composition kept for existing callers) still nets exactly
+// the same single diagnostic as before the split.
+{
+  const { tokens: all } = lex('x^2 + sqrt(');
+  const tokens = all.filter((t) => t.kind !== 'NEWLINE' && t.kind !== 'COMMENT');
+
+  const diags = [];
+  const segments = parseStatement(tokens, diags);
+  check('Diagnostics', 'parseStatement on "x^2 + sqrt(" yields exactly 1 diagnostic',
+    diags.length === 1, JSON.stringify(diags));
+
+  const before = diags.length;
+  renderSegments(segments, 0);
+  check('Diagnostics', 'renderSegments on the result adds ZERO new diagnostics',
+    diags.length === before, JSON.stringify(diags));
+
+  const diags2 = [];
+  renderStatement(tokens, 0, diags2);
+  check('Diagnostics', 'renderStatement (compat path) also yields exactly 1 diagnostic',
+    diags2.length === 1, JSON.stringify(diags2));
 }
 
 // ============================================

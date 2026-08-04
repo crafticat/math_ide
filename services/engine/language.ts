@@ -40,6 +40,11 @@ export const SYMBOL_MAP: Record<string, string> = {
   'and': '\\land',
   'or': '\\lor',
   'not': '\\neg',
+  // Addition beyond compiler.ts's symbolMap (compiler.ts spells this out as
+  // its own regex, not a table lookup): the shared source of truth for the
+  // empty-set glyph, referenced from parser.ts's `{}` handling and noted at
+  // render.ts's (structurally separate) empty-SetLiteral branch.
+  'emptyset': '\\emptyset',
   // NOTE: greek entries below are legacy-inherited duplicates of GREEK. GREEK is authoritative for greek lookup; these stay only for exact-port fidelity and are asserted identical in tests. Collapse once engine lookup order is final.
   // Greek
   'delta': '\\delta', 'alpha': '\\alpha', 'beta': '\\beta', 'gamma': '\\gamma', 'epsilon': '\\epsilon',

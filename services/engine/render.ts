@@ -12,6 +12,14 @@
 //   renderStatement(tokens, indent, diags, highlight?) - one source line
 //   renderDocument(ast, diags)                        - the whole document
 //
+// renderStatement is a thin composition of two lower-level exports:
+// parseStatement (segment + parse each math run ONCE) and renderSegments
+// (render only - adds no diagnostics). They are split out, and renderDocument
+// is built on top of them rather than on renderStatement directly, so a
+// future engine.ts can capture the parsed Expr trees per statement (for
+// caret->node lookup) without paying for a second parse or duplicating every
+// diagnostic the first one already emitted.
+//
 // ---- The spacing model (the part that is easy to get subtly wrong) ----
 //
 // Almost all math-to-math joins go through cat(), which concatenates TIGHTLY
@@ -50,6 +58,14 @@ import { FUNCTIONS } from './language';
 /** The node the caret sits on (Task 11). A node whose span EQUALS this one is
  *  wrapped in \htmlClass{hl-node}{...} so the view can tint it. */
 export interface HighlightSpec { span: Span }
+
+/** One prose or math run of a statement, already segmented and (for math)
+ *  parsed - the unit parseStatement produces and renderSegments consumes
+ *  (see the header). Exactly one of `expr`/`text` is populated, matching
+ *  `kind`; `tokens` is kept on both so gap/adjacency spacing between
+ *  neighboring segments can still be measured without re-touching the
+ *  parser or disambiguator. */
+export interface ParsedSegment { kind: 'prose' | 'math'; tokens: Token[]; expr?: Expr; text?: string; span: Span }
 
 // ---- Rendering context ----
 // Threaded through the whole expression walk. Both flags are "where am I",
@@ -270,14 +286,21 @@ function renderNode(e: Expr, ctx: Ctx): string {
     case 'Frac':
       return renderFrac(e, ctx);
     case 'Pow':
-      return `${scriptBase(e.base, ctx)}^{${render(e.exp, ctx)}}`;
+      return `${scriptBase(e.base, ctx, 'Pow')}^{${render(e.exp, ctx)}}`;
     case 'Sub':
-      return `${scriptBase(e.base, ctx)}_{${render(e.sub, ctx)}}`;
+      return `${scriptBase(e.base, ctx, 'Sub')}_{${render(e.sub, ctx)}}`;
     case 'Call':
       return renderCall(e, ctx, '');
     case 'BigOp':
       return renderBigOp(e, ctx);
     case 'SetLiteral':
+      // NOTE: the ordinary empty-braces spelling `{}` never reaches here -
+      // parser.ts's parseBrace already turns it into a Sym node straight
+      // from SYMBOL_MAP.emptyset (the shared source of truth for this
+      // glyph) before a SetLiteral ever gets built. This branch is only for
+      // a SetLiteral whose elements dropped to zero some other way (e.g.
+      // `{,}` - splitTop drops the empty piece on both sides of the comma).
+      // Kept as a literal here rather than importing SYMBOL_MAP for one glyph.
       return e.elements.length === 0
         ? '\\emptyset'
         : `\\{${e.elements.map((x) => render(x, ctx)).join(', ')}\\}`;
@@ -393,11 +416,21 @@ function renderGroup(e: Expr & { kind: 'Group' }, ctx: Ctx): string {
 // script as-is; a tall base grows a pair of parens so the script cannot sit
 // halfway up it (`\left(\sqrt{\frac{a+b}{c+d}}\right)^{2}`); a bare infix
 // expression gets plain braces so the script applies to all of it.
-function scriptBase(base: Expr, ctx: Ctx): string {
+//
+// `own` is which of Pow/Sub is doing the wrapping. A base that is itself the
+// SAME kind of script also gets braced: a parenthesized script argument
+// closes off the parser's right-assoc chain (see parser.ts's header), so
+// `x^(a)^(b)` parses LEFT-nested - Pow(base: Pow(x,a), exp: b) - and the
+// bare concatenation `x^{a}^{b}` is a KaTeX "Double superscript" error;
+// bracing the base fixes it: `{x^{a}}^{b}`. A DIFFERENT kind of script
+// underneath (`a_i^2` = Pow(base: Sub(a,i), exp: 2)) is not ambiguous to
+// KaTeX and must stay bare to match the approved golden, which is why this
+// is `base.kind === own`, not "base.kind is Pow or Sub".
+function scriptBase(base: Expr, ctx: Ctx, own: 'Pow' | 'Sub'): string {
   const latex = render(base, ctx);
   if (SELF_DELIMITED.has(base.kind)) return latex;
   if (containsTall(base)) return `\\left(${latex}\\right)`;
-  if (base.kind === 'BinOp' || base.kind === 'Relation' || base.kind === 'UnaryOp') return `{${latex}}`;
+  if (base.kind === 'BinOp' || base.kind === 'Relation' || base.kind === 'UnaryOp' || base.kind === own) return `{${latex}}`;
   return latex;
 }
 
@@ -493,36 +526,67 @@ function appendMerged(acc: string, piece: string): string {
   return `${acc.slice(0, acc.length - tail[0].length)}\\text{${joined}}${piece.slice(close + 1)}`;
 }
 
-/**
- * Renders one statement (a single source line's tokens) to LaTeX, prefixed by
- * `indent` \quad's. Runs the segmentation and expression stages itself, so
- * callers hand it raw tokens; diagnostics from both stages are appended to
- * `diagnostics`.
- */
-export function renderStatement(
-  tokens: Token[],
-  indent: number,
-  diagnostics: Diagnostic[],
-  highlight?: HighlightSpec,
-): string {
-  const prefix = quads(indent);
-  if (!tokens || tokens.length === 0) return prefix;
+// Span covering a whole token run (its first token's start to its last
+// token's end) - used for a prose ParsedSegment's span; a math segment just
+// reuses its parsed Expr's own span (see parseStatement).
+const spanOfRun = (tokens: Token[]): Span => ({
+  startLine: tokens[0].span.startLine,
+  startCol: tokens[0].span.startCol,
+  endLine: tokens[tokens.length - 1].span.endLine,
+  endCol: tokens[tokens.length - 1].span.endCol,
+});
 
+/**
+ * Segments `tokens` into prose/math runs and parses every math run's
+ * expression ONCE, in document order. This is the front half of
+ * renderStatement (below), split out because a future engine.ts (Task 7)
+ * needs these same Expr trees for nodeAt() caret lookup: re-running
+ * parseExpression over the same tokens a second time would both waste the
+ * work and duplicate every diagnostic that parse emits (segment()'s own
+ * diagnostics - e.g. an ambiguous-word info - are likewise emitted exactly
+ * once, here, never again in renderSegments).
+ */
+export function parseStatement(tokens: Token[], diagnostics: Diagnostic[]): ParsedSegment[] {
+  if (!tokens || tokens.length === 0) return [];
   const { runs } = segment(tokens, diagnostics);
+  const segments: ParsedSegment[] = [];
+  for (const run of runs) {
+    if (run.tokens.length === 0) continue;
+    if (run.kind === 'prose') {
+      segments.push({ kind: 'prose', tokens: run.tokens, text: proseText(run.tokens), span: spanOfRun(run.tokens) });
+    } else {
+      const expr = parseExpression(run.tokens, diagnostics);
+      segments.push({ kind: 'math', tokens: run.tokens, expr, span: expr.span });
+    }
+  }
+  return segments;
+}
+
+/**
+ * Renders already-segmented-and-parsed segments (from parseStatement) to
+ * LaTeX, prefixed by `indent` \quad's. Does NO parsing and adds NO
+ * diagnostics of its own - both already happened in parseStatement. Spacing
+ * at each prose/math boundary is unchanged from before the parseStatement/
+ * renderSegments split (see the header's spacing model): a gap after a
+ * COMPLETE math clause becomes a real `\ ` clause break, a gap after a bare
+ * term stays inside the \text{} braces instead.
+ */
+export function renderSegments(segments: ParsedSegment[], indent: number, highlight?: HighlightSpec): string {
+  const prefix = quads(indent);
   let out = '';
-  // The expression of the math run immediately to the left, or null when the
-  // previous run was prose - decides how the next prose run is spaced.
+  // The expression of the math segment immediately to the left, or null when
+  // the previous segment was prose - decides how the next prose segment is
+  // spaced.
   let prevMath: Expr | null = null;
 
-  for (let i = 0; i < runs.length; i++) {
-    const run = runs[i];
-    if (run.tokens.length === 0) continue;
-    const prev = runs[i - 1];
-    const next = runs[i + 1];
-    const gapBefore = !!prev && prev.tokens.length > 0 && hasGap(prev.tokens[prev.tokens.length - 1], run.tokens[0]);
-    const gapAfter = !!next && next.tokens.length > 0 && hasGap(run.tokens[run.tokens.length - 1], next.tokens[0]);
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    const prev = segments[i - 1];
+    const next = segments[i + 1];
+    const gapBefore = !!prev && prev.tokens.length > 0 && hasGap(prev.tokens[prev.tokens.length - 1], seg.tokens[0]);
+    const gapAfter = !!next && next.tokens.length > 0 && hasGap(seg.tokens[seg.tokens.length - 1], next.tokens[0]);
 
-    if (run.kind === 'prose') {
+    if (seg.kind === 'prose') {
       // After a finished clause the boundary reads as a clause break and gets
       // a real `\ ` (`5\cdot t\ \text{and note ...}`); after a bare term the
       // space belongs inside the text, next to the words it separates
@@ -530,17 +594,32 @@ export function renderStatement(
       const clauseBreak = gapBefore && prevMath !== null && isClause(prevMath);
       const lead = gapBefore && !clauseBreak ? ' ' : '';
       const trail = gapAfter ? ' ' : '';
-      const text = `\\text{${lead}${escapeLatex(proseText(run.tokens))}${trail}}`;
+      const text = `\\text{${lead}${escapeLatex(seg.text ?? proseText(seg.tokens))}${trail}}`;
       out = appendMerged(clauseBreak ? `${out}\\ ` : out, text);
       prevMath = null;
-    } else {
-      const expr = parseExpression(run.tokens, diagnostics);
-      out = appendMerged(out, renderExpr(expr, highlight));
-      prevMath = expr;
+    } else if (seg.expr) {
+      out = appendMerged(out, renderExpr(seg.expr, highlight));
+      prevMath = seg.expr;
     }
   }
 
   return prefix + out;
+}
+
+/**
+ * Renders one statement (a single source line's tokens) to LaTeX, prefixed by
+ * `indent` \quad's. Thin composition of parseStatement + renderSegments -
+ * the one-call convenience API for callers (like renderDocument's Claim/
+ * Statement cases) that have no use for the intermediate ParsedSegment[].
+ * Diagnostics from both stages are appended to `diagnostics`.
+ */
+export function renderStatement(
+  tokens: Token[],
+  indent: number,
+  diagnostics: Diagnostic[],
+  highlight?: HighlightSpec,
+): string {
+  return renderSegments(parseStatement(tokens, diagnostics), indent, highlight);
 }
 
 // ================= document rendering =================
@@ -628,15 +707,21 @@ export function renderDocument(ast: DocumentAst, diagnostics: Diagnostic[]): Eng
 
         case 'Claim': {
           const tokens = (block as Block & StatementTokens).tokens ?? [];
+          // Built via parseStatement + renderSegments (rather than the
+          // renderStatement convenience wrapper) so `segments` sits right
+          // here as the per-statement ParsedSegment[] a future engine.ts can
+          // capture for nodeAt() - see the header.
+          const segments = parseStatement(tokens, diagnostics);
           push('line', block.span.startLine,
-            `${quads(depth)}\\textit{\\text{Claim: }}${renderStatement(tokens, 0, diagnostics)}`);
+            `${quads(depth)}\\textit{\\text{Claim: }}${renderSegments(segments, 0)}`);
           walk(block.children, depth + 1);
           break;
         }
 
         case 'Statement': {
           const tokens = (block as Block & StatementTokens).tokens ?? [];
-          push('line', block.span.startLine, renderStatement(tokens, depth, diagnostics));
+          const segments = parseStatement(tokens, diagnostics);
+          push('line', block.span.startLine, renderSegments(segments, depth));
           break;
         }
 
