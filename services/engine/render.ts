@@ -51,7 +51,7 @@ import type { Token, Diagnostic, Expr, Span, Block, DocumentAst, EngineLine } fr
 import type { StatementTokens } from './document';
 import { segment } from './disambiguate';
 import { parseExpression } from './parser';
-import { FUNCTIONS } from './language';
+import { FUNCTIONS, SYMBOL_MAP } from './language';
 
 // ---- Public API ----
 
@@ -169,7 +169,9 @@ function childrenOf(e: Expr): Expr[] {
     case 'Matrix': return e.rows.flat();
     case 'Cases': return e.branches.flatMap((b) => (b.condition ? [b.value, b.condition] : [b.value]));
     case 'Relation': return e.operands;
-    default: return [];
+    case 'Num': case 'Var': case 'Ident': case 'Sym': case 'Text': case 'Raw':
+      return [];
+    default: { const _exhaustive: never = e; return []; }
   }
 }
 
@@ -235,6 +237,11 @@ function isAtomicOperand(e: Expr): boolean {
 const sameSpan = (a: Span, b: Span): boolean =>
   a.startLine === b.startLine && a.startCol === b.startCol && a.endLine === b.endLine && a.endCol === b.endCol;
 
+// Cell and row separators for the two grid-shaped nodes (Matrix, Cases) -
+// hoisted so the LaTeX array separator policy is one edit, not two.
+const CELL_SEP = ' & ';
+const ROW_SEP = '\\\\ ';
+
 // ================= expression rendering =================
 
 /**
@@ -294,15 +301,13 @@ function renderNode(e: Expr, ctx: Ctx): string {
     case 'BigOp':
       return renderBigOp(e, ctx);
     case 'SetLiteral':
-      // NOTE: the ordinary empty-braces spelling `{}` never reaches here -
-      // parser.ts's parseBrace already turns it into a Sym node straight
-      // from SYMBOL_MAP.emptyset (the shared source of truth for this
-      // glyph) before a SetLiteral ever gets built. This branch is only for
-      // a SetLiteral whose elements dropped to zero some other way (e.g.
-      // `{,}` - splitTop drops the empty piece on both sides of the comma).
-      // Kept as a literal here rather than importing SYMBOL_MAP for one glyph.
+      // The ordinary empty-braces spelling `{}` never reaches here - parser.ts's
+      // parseBrace already turns it into a Sym node straight from
+      // SYMBOL_MAP.emptyset before a SetLiteral ever gets built. This branch is
+      // only for a SetLiteral whose elements dropped to zero some other way
+      // (e.g. `{,}` - splitTop drops the empty piece on both sides of the comma).
       return e.elements.length === 0
-        ? '\\emptyset'
+        ? SYMBOL_MAP.emptyset
         : `\\{${e.elements.map((x) => render(x, ctx)).join(', ')}\\}`;
     case 'SetBuilder':
       return `\\left\\{${render(e.element, { ...ctx, inSetBuilderCond: false })}\\ \\middle|\\ ` +
@@ -316,16 +321,15 @@ function renderNode(e: Expr, ctx: Ctx): string {
     case 'Group':
       return renderGroup(e, ctx);
     case 'Matrix':
-      return `\\begin{${e.env}}${e.rows.map((r) => r.map((c) => render(c, ctx)).join(' & ')).join('\\\\ ')}\\end{${e.env}}`;
+      return `\\begin{${e.env}}${e.rows.map((r) => r.map((c) => render(c, ctx)).join(CELL_SEP)).join(ROW_SEP)}\\end{${e.env}}`;
     case 'Cases':
       return `\\begin{cases}${e.branches.map((b) => {
         const cond = b.condition ? `\\text{if }${render(b.condition, ctx)}` : '\\text{otherwise}';
-        return `${render(b.value, ctx)} & ${cond}`;
-      }).join('\\\\ ')}\\end{cases}`;
+        return `${render(b.value, ctx)}${CELL_SEP}${cond}`;
+      }).join(ROW_SEP)}\\end{cases}`;
     case 'Relation':
       return renderRelation(e, ctx);
-    default:
-      return '';
+    default: { const _exhaustive: never = e; return ''; }
   }
 }
 

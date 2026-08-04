@@ -286,12 +286,20 @@ const DOC_GOLDEN = [
   checkExact('Subtask', 'counter resets in a new parent: (a) gamma', labels[4], String.raw`\quad \quad \textbf{\text{(a) gamma:}}`);
 }
 {
-  // Roman numerals past iii, and an untitled subtask.
+  // Roman numerals past iii.
   const src = 'Proof {\n' + ['a', 'b', 'c', 'd', 'e'].map((t) => `  - ${t} {\n    x = 1\n  }`).join('\n') + '\n}';
   const { lines } = renderDoc(src);
   const labels = lines.map((l) => l.latex).filter((s) => s.includes('\\textbf{\\text{('));
   check('Subtask', 'roman numerals run (i)(ii)(iii)(iv)(v)',
     labels.map((s) => s.match(/\((\w+)\)/)[1]).join(',') === 'i,ii,iii,iv,v', labels.join(' | '));
+}
+{
+  // An untitled subtask ("- {" with no title text) renders the bare label
+  // with no colon and no title (render.ts's Subtask branch: `block.title ?
+  // ... : \`(${label})\``) - distinct from the titled path exercised above.
+  const { lines } = renderDoc('Proof {\n  - {\n    x = 1\n  }\n}');
+  const label = lines.map((l) => l.latex).find((s) => s.includes('\\textbf{\\text{('));
+  checkExact('Subtask', 'untitled subtask renders bare (i), no colon', label, String.raw`\quad \textbf{\text{(i)}}`);
 }
 
 // Claim (?:) rendering.
