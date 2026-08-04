@@ -54,7 +54,7 @@
 
 import type { Token, Diagnostic, Expr, Span } from './types';
 import { lex } from './lexer';
-import { GREEK, SYMBOL_MAP, MATH_KEYWORDS, FUNCTIONS, MATH_PACKAGE, RELATION_WORDS } from './language';
+import { GREEK, SYMBOL_MAP, MATH_KEYWORDS, FUNCTIONS, MATH_PACKAGE, RELATION_WORDS, STOP_WORDS, isOperatorName, operatorLatex } from './language';
 
 // ---- Binding powers ----
 const BP = {
@@ -126,6 +126,15 @@ const SEQ_CONNECTORS = new Set([':', '.', ',', ';']);
 
 // Relational/arrow operators that veto the AngleVector reading of a '<'.
 const VECTOR_VETO = new Set(['=', '!=', '<=', '>=', '<', '=>', '<=>', '->']);
+
+// OP tokens that are ATOMS rather than operators - they stand for a symbol and
+// take no operands. `...` is the only one: the lexer emits the three-dot
+// ellipsis as a single token precisely so it can resolve to one `\ldots` here.
+// NOTE (judgment call): `\ldots` uniformly, never `\cdots`. Baseline dots are
+// right between list items (`{1, ..., n}`, `f(x_1, ..., x_n)`) and merely
+// low between summands (`a_1 + ... + a_n`); picking per context would need the
+// parser to know which operator surrounds the node, which it does not.
+const OP_SYMBOLS: Record<string, string> = { '...': '\\ldots' };
 
 const OPENERS: Record<string, string> = { LPAREN: 'RPAREN', LBRACKET: 'RBRACKET', LBRACE: 'RBRACE' };
 const CLOSERS = new Set(['RPAREN', 'RBRACKET', 'RBRACE']);
@@ -405,6 +414,20 @@ class Parser {
         return { ...inner, span: this.spanOf(open, close + 1) } as Expr;
       }
     }
+    // The superscript-limit convention: in `a^+`, `b^-`, `x -> 0^+` the SIGN
+    // itself is the whole script. Without this, parseUnary read the '-' as a
+    // prefix sign reaching for an operand and parseAtom read the '+' as a
+    // misplaced infix operator - either way the script argument swallowed
+    // tokens past the sign, so `a^+ + b^-` recovered the binary '+' as Raw.
+    // A sign that DOES have an operand after it (`x^-1`, `x^-n`) is untouched
+    // and still parses as the unary minus it is.
+    if (t && t.kind === 'OP' && (t.text === '+' || t.text === '-')) {
+      const after = this.peek(1);
+      if (!after || !this.startsExpr(after) || this.infixOf(after)) {
+        this.pos++;
+        return { kind: 'Sym', name: t.text, latex: t.text, span: t.span };
+      }
+    }
     return this.parseBinary(BP.SUP, { scriptOp }); // right-assoc: x^y^z = x^(y^z)
   }
 
@@ -460,6 +483,10 @@ class Parser {
       case 'LBRACE':
         return this.parseBrace();
       case 'OP':
+        if (OP_SYMBOLS[t.text]) {
+          this.pos++;
+          return { kind: 'Sym', name: t.text, latex: OP_SYMBOLS[t.text], span: t.span };
+        }
         if (t.text === '|') return this.parseAbs();
         if (t.text === '<') {
           const vec = this.tryAngleVector();
@@ -522,6 +549,16 @@ class Parser {
 
     this.pos = start + 1;
     const span = tok.span;
+    // A named operator with no argument list (`sin x`, `det A`, `log n`) is
+    // the operator GLYPH applied by juxtaposition - the spelling working
+    // mathematicians use - so it resolves to the same `\sin`/`\det` macro the
+    // call form emits, NOT to the bare letters `sin`. Reached before the
+    // MATH_KEYWORDS fallback below, which is what used to hand back
+    // `Sym(latex: 'sin')` and render `sin x` as `sinx`: with no backslash to
+    // end the control word, cat() had nothing to space and the operator glued
+    // to its operand. Must stay AFTER the call check above so `sin(x)` is
+    // still a Call.
+    if (isOperatorName(w)) return { kind: 'Sym', name: w, latex: operatorLatex(w), span };
     if (GREEK[w]) return this.quantified({ kind: 'Sym', name: w, latex: GREEK[w], span });
     if (SYMBOL_MAP[w]) return this.quantified({ kind: 'Sym', name: w, latex: SYMBOL_MAP[w], span });
     if (w.length === 1) return { kind: 'Var', name: w, span };
@@ -558,19 +595,48 @@ class Parser {
     return primes > 0 ? { kind: 'Prime', operand: call, count: primes, span } : call;
   }
 
-  // `sum(i=1 -> n)`, `integral(a -> b)`, `lim(x -> 0)`, `lim_(h -> 0)`.
-  // Parens whose content has no top-level '->' are NOT bounds: the bare BigOp
-  // is returned and the parens are left for the juxtaposition level to pick up
-  // as an ordinary Group.
+  // Two spellings of the same thing:
+  //   MathScript bounds  `sum(i=1 -> n)`, `integral(a -> b)`, `lim_(h -> 0)`
+  //   LaTeX-style scripts `sum_(i=1)^(n)`, `integral_(0)^(1)`, `sum_(n=1)^(inf)`
+  // The second is what a LaTeX-fluent user types, and it used to fall through
+  // this function entirely: the bare BigOp came back with `pos` still on the
+  // `_`, so the ordinary script operators picked it up and built
+  // `((\sum)_{i=1})^{n}` - and, since the Σ was then buried inside a Pow
+  // rather than heading a juxtaposition chain, makeFrac's big-operator rule
+  // no longer saw it and `sum_(n=1)^(inf) 1/n^2` dragged the Σ into the
+  // numerator. Bounds bound here instead, and the node returned is the SAME
+  // BigOp the arrow form produces, so the summand-scope rule applies to both.
+  //
+  // Parens whose content has no top-level '->' and no leading `_` are NOT
+  // bounds: the bare BigOp is returned and the parens are left for the
+  // juxtaposition level to pick up as an ordinary Group.
   private parseBigOp(op: 'sum' | 'integral' | 'lim'): Expr {
     const start = this.pos;
     this.pos++;
     let k = this.pos;
-    if (this.isOp(this.toks[k], '_') && this.kindAt(k + 1) === 'LPAREN') k++; // optional `_` before bounds
+    const scripted = this.isOp(this.toks[k], '_') && this.kindAt(k + 1) === 'LPAREN';
+    if (scripted) k++; // optional `_` before bounds
     if (this.kindAt(k) === 'LPAREN') {
       const close = this.findMatch(k);
       if (close < 0) return this.rawTail(start);
       const arrow = this.findTop(k + 1, close, (t) => this.isOp(t, '->'));
+      if (arrow < 0 && scripted) {
+        // `_(from)` plus an optional `^(to)`. The arrow form is checked first
+        // (above) so `lim_(h -> 0)` keeps taking it - it means one subscript
+        // with an arrow in it, not a lower bound.
+        const from = this.parseRange(k + 1, close);
+        let end = close + 1;
+        let to: Expr | null = null;
+        if (this.isOp(this.toks[end], '^') && this.kindAt(end + 1) === 'LPAREN') {
+          const supClose = this.findMatch(end + 1);
+          if (supClose >= 0) {
+            to = this.parseRange(end + 2, supClose);
+            end = supClose + 1;
+          }
+        }
+        this.pos = end;
+        return { kind: 'BigOp', op, from, to, span: this.spanOf(start, end) };
+      }
       if (arrow >= 0) {
         // NOTE (judgment call): an empty bound (`sum( -> n)`, `sum(i=1 -> )`)
         // parses to a silent Raw("") - parseRange's from>=to case builds the
@@ -670,10 +736,93 @@ class Parser {
     if (pipes.length === 1 && (sep < 0 || pipes[0] < sep)) sep = pipes[0];
 
     if (sep >= 0) {
-      return { kind: 'SetBuilder', element: this.parseRange(from, sep), condition: this.parseRange(sep + 1, to), span };
+      return { kind: 'SetBuilder', element: this.parseRange(from, sep), condition: this.parseCondition(sep + 1, to), span };
     }
     const elements = this.splitTop(from, to, (t) => this.isOp(t, ',')).map(([a, b]) => this.parseRange(a, b));
     return { kind: 'SetLiteral', elements, span };
+  }
+
+  // The condition side of a set-builder tolerates written-out English:
+  // `{n : n is prime}` is standard notation for a set whose membership test is
+  // a sentence, and the convention is to typeset that sentence as TEXT inside
+  // the braces - `\{n \mid n \text{ is prime}\}` - which is only possible if
+  // the words reach the parser at all. They now do: the disambiguator keeps a
+  // set-builder in one run however much English it holds (the rule `(...)`
+  // groups already had). This turns each maximal run of those words into ONE
+  // Text node and parses everything between them normally, juxtaposing the
+  // pieces.
+  //
+  // Only the CONDITION gets this. The element side of a set-builder is a term
+  // (`{n^2 : ...}`, `{x in R : ...}`), not a sentence, so there is no English
+  // there to rescue and no reason to widen the blast radius.
+  private parseCondition(from: number, to: number): Expr {
+    const runs = this.proseRunsIn(from, to);
+    if (runs.length === 0) return this.parseRange(from, to);
+    const parts: Expr[] = [];
+    let at = from;
+    for (const [a, b] of runs) {
+      if (a > at) parts.push(this.parseRange(at, a));
+      parts.push(this.textAtom(a, b, from, to));
+      at = b;
+    }
+    if (to > at) parts.push(this.parseRange(at, to));
+    return parts.reduce((l, r) => this.binop('juxt', l, r));
+  }
+
+  // Maximal runs of prose words in [from, to), at the TOP bracket level only:
+  // a run inside a nested group would leave parseCondition splitting the range
+  // at a point where the brackets are unbalanced, and prose there (`{x : f(x
+  // is big)}`) is not a shape worth supporting.
+  private proseRunsIn(from: number, to: number): Range[] {
+    const runs: Range[] = [];
+    let depth = 0;
+    let start = -1;
+    for (let i = from; i < to; i++) {
+      const t = this.toks[i];
+      if (OPENERS[t.kind]) depth++;
+      else if (CLOSERS.has(t.kind)) depth = Math.max(0, depth - 1);
+      const prose = depth === 0 && this.isProseWord(i);
+      if (prose && start < 0) start = i;
+      if (!prose && start >= 0) { runs.push([start, i]); start = -1; }
+    }
+    if (start >= 0) runs.push([start, to]);
+    return runs;
+  }
+
+  // Is the word at `i` English rather than notation? Deliberately LEXICAL -
+  // tables only, no scoring: the disambiguator has already settled that this
+  // whole group is mathematics, so the only question left is which of its
+  // words spell out a condition in words. Order matters - `exists`, `in`,
+  // `suchthat` and `not` are all English words that this language ALSO defines
+  // as symbols, so the math tables get the first say.
+  private isProseWord(i: number): boolean {
+    const t = this.toks[i];
+    if (t.kind !== 'WORD') return false;
+    const w = t.text;
+    if (w.length === 1 || /^[A-Za-z][0-9]+$/.test(w)) return false; // `n`, `x1` - variables
+    if (this.kindAt(i + 1) === 'LPAREN') return false;              // a callee, whatever it is called
+    // `Math.naturals`: the member is not an English word just because it is in
+    // no table (mirrors the disambiguator's own Math.* absolute).
+    if (this.isOp(this.toks[i - 1], '.') && this.kindAt(i - 2) === 'WORD' && this.toks[i - 2].text === 'Math') return false;
+    return GREEK[w] === undefined && SYMBOL_MAP[w] === undefined &&
+      !MATH_KEYWORDS.has(w) && FUNCTIONS[w] === undefined;
+  }
+
+  // The Text node for one prose run. Spacing follows the same model as a
+  // statement's prose/math boundary (see render.ts's header): the space lives
+  // INSIDE the \text{} braces, added on whichever side the source has a gap
+  // AND there is something within the condition to separate from - the braces
+  // and the `\middle|` bring their own spacing, so a run at either end of the
+  // condition gets none.
+  private textAtom(a: number, b: number, from: number, to: number): Expr {
+    const lead = a > from && this.hasGap(a - 1, a) ? ' ' : '';
+    const trail = b < to && this.hasGap(b - 1, b) ? ' ' : '';
+    return { kind: 'Text', text: `${lead}${this.textOf(a, b)}${trail}`, span: this.spanOf(a, b) };
+  }
+
+  private hasGap(i: number, j: number): boolean {
+    const left = this.toks[i].span, right = this.toks[j].span;
+    return right.startLine !== left.endLine || right.startCol > left.endCol;
   }
 
   // '|' in operand (prefix) position opens an Abs; the matching close is found
@@ -814,6 +963,10 @@ class Parser {
         return true;
       case 'WORD':
         return !QUANTIFIERS.has(t.text);
+      case 'OP':
+        // An ellipsis is an operand, so `x_1 x_2 ... x_n` juxtaposes it like
+        // any other factor; every other OP is an operator here.
+        return OP_SYMBOLS[t.text] !== undefined;
       default:
         return false;
     }

@@ -209,6 +209,30 @@ export const FUNCTIONS: Record<string, { arity: number | 'var'; kind: 'named' | 
   factorial: { arity: 1, kind: 'named' },
 };
 
+// ---- Named operators ----
+// The subset of FUNCTIONS that names a LaTeX OPERATOR - a symbol with an
+// upright standalone spelling (`\sin`, `\det`, `\operatorname{lcm}`) that is
+// meaningful with NO argument list at all: `sin x`, `det A`, `log n` are how
+// mathematicians actually write them. Exactly the `kind: 'named'` entries with
+// variadic arity; `choose`/`factorial` are fixed-arity MathScript spellings of
+// `\binom` and postfix `!`, not operators, and have no `\choose`-style
+// standalone form to emit.
+//
+// Used by parser.ts (a bare operator word is a Sym carrying this latex, which
+// is what stops `sin x` printing as `sinx` - the backslash ends the control
+// word and the renderer's cat() then spaces it) and by render.ts (the same
+// spelling for the CALL form, so `sin(x)` and `sin x` cannot drift apart).
+export const isOperatorName = (w: string): boolean => {
+  const def = FUNCTIONS[w];
+  return def !== undefined && def.kind === 'named' && def.arity === 'var';
+};
+
+// NOTE (judgment call): neither LaTeX/amsmath nor KaTeX defines `\lcm`, so
+// emitting it would produce an "undefined control sequence" in the preview.
+// \operatorname keeps the same upright-roman look and actually renders.
+const OPERATOR_LATEX: Record<string, string> = { lcm: '\\operatorname{lcm}' };
+export const operatorLatex = (w: string): string => OPERATOR_LATEX[w] ?? `\\${w}`;
+
 // ---- SCOPES ----
 // Ported from compiler.ts's scope regex (~line 270) and its `italicScopes`
 // set (~line 277): Proof/Claim/Remark/Example render italic, the rest bold.

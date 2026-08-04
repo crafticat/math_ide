@@ -98,6 +98,33 @@ const CASES = [
   ['abdotc', ['WORD:abdotc']],
   ['fdot', ['WORD:fdot']],
   ['f2dotg', ['WORD:f2dotg']],
+  // T9.5 fix 7 - the ellipsis is ONE token, so the parser can resolve it to a
+  // single `\ldots`. As three OP:'.' tokens it recovered the first as Raw and
+  // printed the other two literally (`\{1, \texttt{.}.., n\}`).
+  ['{1, ..., n}', ['LBRACE:{', 'NUMBER:1', 'OP:,', 'OP:...', 'OP:,', 'WORD:n', 'RBRACE:}']],
+  ['a_1 + ... + a_n', ['WORD:a', 'OP:_', 'NUMBER:1', 'OP:+', 'OP:...', 'OP:+', 'WORD:a', 'OP:_', 'WORD:n']],
+  // ...but ONLY the exact three-dot spelling; two periods stay two periods,
+  // and a fourth dot is its own token after the ellipsis.
+  ['a .. b', ['WORD:a', 'OP:.', 'OP:.', 'WORD:b']],
+  ['a .... b', ['WORD:a', 'OP:...', 'OP:.', 'WORD:b']],
+  ['Math.reals', ['WORD:Math', 'OP:.', 'WORD:reals']],
+  ['3.14', ['NUMBER:3.14']],
+  // T9.5 fix 4 - a contraction/possessive is ONE word. Split in three it left
+  // the apostrophe stranded in a math run: `\text{By Euler}\texttt{'}s`.
+  ["By Euler's theorem", ['WORD:By', "WORD:Euler's", 'WORD:theorem']],
+  ["don't stop", ["WORD:don't", 'WORD:stop']],
+  ["it's", ["WORD:it's"]],
+  ["we'll show", ["WORD:we'll", 'WORD:show']],
+  // ...and the shapes that must NOT merge, or a derivative would become an
+  // English word: a single-letter base, a quote with no contraction tail, a
+  // quote followed by a call's paren, and a tail that is not a suffix.
+  ["F'(x)", ['WORD:F', "OP:'", 'LPAREN:(', 'WORD:x', 'RPAREN:)']],
+  ["F's", ['WORD:F', "OP:'", 'WORD:s']],
+  ["phi' = 0", ['WORD:phi', "OP:'", 'OP:=', 'NUMBER:0']],
+  ["Aut'(G)", ['WORD:Aut', "OP:'", 'LPAREN:(', 'WORD:G', 'RPAREN:)']],
+  ["Euler'x", ['WORD:Euler', "OP:'", 'WORD:x']],
+  ["Euler's2", ['WORD:Euler', "OP:'", 'WORD:s2']],
+  ["Euler ' s", ['WORD:Euler', "OP:'", 'WORD:s']],
   // '!' is an operator (postfix factorial); '!=' still wins the longest match.
   ['n!', ['WORD:n', 'OP:!']],
   ['(j-1)! + 1', ['LPAREN:(', 'WORD:j', 'OP:-', 'NUMBER:1', 'RPAREN:)', 'OP:!', 'OP:+', 'NUMBER:1']],

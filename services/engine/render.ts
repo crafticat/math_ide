@@ -52,10 +52,10 @@
 // spec prose, are marked "NOTE:" at their site.
 
 import type { Token, Diagnostic, Expr, Span, Block, DocumentAst, EngineLine } from './types';
-import type { StatementTokens } from './document';
+import type { StatementTokens, TitleTokens } from './document';
 import { segment } from './disambiguate';
 import { parseExpression } from './parser';
-import { FUNCTIONS, MATH_KEYWORDS, SYMBOL_MAP } from './language';
+import { FUNCTIONS, MATH_KEYWORDS, SYMBOL_MAP, operatorLatex } from './language';
 
 // ---- Public API ----
 
@@ -126,13 +126,6 @@ const RELATION_LATEX: Record<string, string> = {
   'similar': '\\sim', 'parallel': '\\parallel', 'perp': '\\perp', 'corresponds': '\\triangleq',
   'implies': '\\implies', '=>': '\\implies', 'iff': '\\iff', '<=>': '\\iff',
 };
-
-// Named functions whose LaTeX name is not just `\` + the MathScript name.
-// NOTE (judgment call): neither LaTeX/amsmath nor KaTeX defines `\lcm`, so
-// emitting it (as the spec's `\name(...)` shorthand would) produces an
-// "undefined control sequence" in the preview. \operatorname keeps the same
-// upright-roman look and actually renders.
-const NAMED_LATEX: Record<string, string> = { lcm: '\\operatorname{lcm}' };
 
 // Mirrors parser.ts's DIFFERENTIALS (module-local there). A juxtaposition
 // whose right side is one of these gets a thin space: `\,dx`.
@@ -620,7 +613,11 @@ function renderCall(e: Expr & { kind: 'Call' }, ctx: Ctx, primes: string): strin
   }
   const list = args.join(', ');
   const def = FUNCTIONS[e.fn];
-  if (def && def.kind === 'named') return `${NAMED_LATEX[e.fn] ?? `\\${e.fn}`}${primes}(${list})`;
+  // `choose`/`factorial` - the two non-operator `named` entries - are handled
+  // by the switch above, so everything reaching here is an operator and gets
+  // the SAME spelling parser.ts gives its bare form (language.ts's
+  // operatorLatex): `sin(x)` and `sin x` cannot drift apart.
+  if (def && def.kind === 'named') return `${operatorLatex(e.fn)}${primes}(${list})`;
   // Unknown callee: a single letter is a variable-shaped function name and
   // stays italic (`f(x)`); a word is upright (`\mathrm{speed}(t)`).
   const head = e.fn.length === 1 ? e.fn : `\\mathrm{${escapeLatex(e.fn)}}`;
@@ -801,6 +798,58 @@ const HEADER_SIZES = ['\\huge', '\\Large', '\\large', '\\normalsize'];
 const SPACER_HEIGHTS = ['1.5em', '1em', '0.5em', '0.2em'];
 const byDepth = (table: string[], depth: number): string => table[Math.min(Math.max(depth, 0), table.length - 1)];
 
+// ---- Scope / Subtask titles ----
+//
+// A title is a HEADING WRITTEN IN WORDS unless it holds something that can
+// only be notation: a bracket, a quoted run, or an operator that is not
+// sentence punctuation. That test is what tells `Theorem Bernoulli
+// inequality`, `Problem 3` and `- base case {` (all words and numbers - the
+// title IS its own text, and `alpha` in a heading is the word, not the letter)
+// apart from `- Apply the test to a_n = x^n/factorial(n) {`, which is a
+// statement that happens to be sitting in a heading and used to print as the
+// escaped token join `a \_ n = x \^{} n / factorial ( n )`.
+const TITLE_SENTENCE_OPS = new Set(['.', ',', ';', '!']);
+const TITLE_NOTATION_KINDS = new Set(['LPAREN', 'RPAREN', 'LBRACKET', 'RBRACKET', 'LBRACE', 'RBRACE', 'STRING', 'MATH_QUOTE']);
+const titleIsNotation = (tokens: Token[]): boolean =>
+  tokens.some((t) => (t.kind === 'OP' ? !TITLE_SENTENCE_OPS.has(t.text) : TITLE_NOTATION_KINDS.has(t.kind)));
+
+/**
+ * The styled group of a Scope header or Subtask label: `lead` (the scope's
+ * name, or `(i) `), the title, and `tail` (the subtask's `:`), all inside the
+ * one \textbf/\textit the caller wraps around the result.
+ *
+ * A words-only title stays exactly what it has always been - ONE \text{} group
+ * holding lead, title and tail together, which is what every approved golden
+ * asserts. A notation-bearing title goes through the ordinary statement
+ * pipeline instead, and its MATH segments are wrapped in `$...$`: `\textbf` is
+ * a text-mode command, and KaTeX rejects `\textbf{a^{2}}` outright ("Expected
+ * 'EOF', got '^'"), while `\textbf{$a^{2}$}` is how LaTeX has always spelled
+ * math inside bold text. appendMerged then collapses the label, any prose
+ * segments and the colon back into single \text{} groups, so the words-only
+ * shape is what a title with no math still produces.
+ */
+function titleGroup(lead: string, tokens: Token[], plain: string, tail: string, diagnostics: Diagnostic[]): string {
+  if (!titleIsNotation(tokens)) return `\\text{${escapeLatex(lead + plain + tail)}}`;
+  let out = `\\text{${escapeLatex(lead)}}`;
+  const segments = parseStatement(tokens, diagnostics);
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    const prev = segments[i - 1];
+    const next = segments[i + 1];
+    if (seg.kind === 'prose') {
+      // Same spacing model as renderSegments: the space lives inside the
+      // braces. There is no `\ ` clause break here - a heading is one line of
+      // running text, not a sequence of clauses.
+      const lat = prev && hasGap(prev.tokens[prev.tokens.length - 1], seg.tokens[0]) ? ' ' : '';
+      const trail = next && hasGap(seg.tokens[seg.tokens.length - 1], next.tokens[0]) ? ' ' : '';
+      out = appendMerged(out, `\\text{${lat}${escapeLatex(seg.text ?? proseText(seg.tokens))}${trail}}`);
+    } else if (seg.expr) {
+      out += `$${renderExpr(seg.expr)}$`;
+    }
+  }
+  return tail ? appendMerged(out, `\\text{${escapeLatex(tail)}}`) : out;
+}
+
 const ROMAN: Array<[number, string]> = [[10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i']];
 function roman(n: number): string {
   let out = '';
@@ -846,6 +895,12 @@ export function renderDocument(
   const segmentsFor = (block: Block): ParsedSegment[] =>
     parsed?.get(block) ?? parseStatement((block as Block & StatementTokens).tokens ?? [], diagnostics);
 
+  // Scope/Subtask titles carry their tokens too (document.ts's TitleTokens).
+  // An AST built by an older caller, or hand-built in a test, may not have
+  // them - an empty list simply reads as "no notation", i.e. the joined title
+  // string is used exactly as before.
+  const titleTokensOf = (block: Block): Token[] => (block as Block & TitleTokens).titleTokens ?? [];
+
   // ids are `line-N` / `spacer-N` for source line N. Two blocks can legally
   // report the same line (e.g. several scopes left unclosed at EOF all end on
   // the last line), so a numeric suffix keeps ids unique for keyed rendering.
@@ -876,9 +931,11 @@ export function renderDocument(
           // first line, where it would just push everything down.
           if (out.length > 0) push('spacer', block.span.startLine, `\\rule{0pt}{${byDepth(SPACER_HEIGHTS, depth)}}`);
           const style = block.styling === 'italic' ? '\\textit' : '\\textbf';
-          const title = block.title ? `${block.scopeType} ${block.title}` : `${block.scopeType}.`;
+          const group = block.title
+            ? titleGroup(`${block.scopeType} `, titleTokensOf(block), block.title, '', diagnostics)
+            : `\\text{${escapeLatex(`${block.scopeType}.`)}}`;
           push('line', block.span.startLine,
-            `${quads(depth)}{${byDepth(HEADER_SIZES, depth)} ${style}{\\text{${escapeLatex(title)}}}}`);
+            `${quads(depth)}{${byDepth(HEADER_SIZES, depth)} ${style}{${group}}}`);
           walk(block.children, depth + 1);
           push('spacer', block.span.endLine, '\\rule{0pt}{0.3em}');
           break;
@@ -888,8 +945,10 @@ export function renderDocument(
           const n = (counters.get(block.depth) ?? 0) + 1;
           counters.set(block.depth, n);
           const label = block.depth <= 1 ? roman(n) : letter(n);
-          const text = block.title ? `(${label}) ${block.title}:` : `(${label})`;
-          push('line', block.span.startLine, `${quads(depth)}\\textbf{\\text{${escapeLatex(text)}}}`);
+          const group = block.title
+            ? titleGroup(`(${label}) `, titleTokensOf(block), block.title, ':', diagnostics)
+            : `\\text{${escapeLatex(`(${label})`)}}`;
+          push('line', block.span.startLine, `${quads(depth)}\\textbf{${group}}`);
           walk(block.children, depth + 1);
           break;
         }

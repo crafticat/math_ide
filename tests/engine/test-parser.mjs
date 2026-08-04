@@ -449,6 +449,78 @@ const EXTRA = [
     'BinOp(seq,BinOp(seq,BinOp(juxt,Sym(exists),Relation([>],[Ident(del),Num(0)])),' +
     'BinOp(juxt,Sym(suchthat),Relation([<],[Abs(BinOp(-,Call(f,[Var(t)]),Call(f,[Var(x)]))),Sym(eps)]))),' +
     'BinOp(juxt,Sym(forall),Relation([in],[Var(t),Group(BinOp(,,BinOp(-,Var(x),Ident(del)),BinOp(+,Var(x),Ident(del))))])))'],
+
+  // ---- T9.5 fix 2: a named OPERATOR used bare is the operator glyph ----
+  // `sin x` is how the function is written when it is applied by
+  // juxtaposition. As a bare Sym carrying the letters `sin` it rendered
+  // `sinx`; as a Sym carrying `\sin` the renderer's cat() spaces it.
+  ['sin x', 'BinOp(juxt,Sym(sin),Var(x))'],
+  ['det A', 'BinOp(juxt,Sym(det),Var(A))'],
+  ['log x + ln y', 'BinOp(+,BinOp(juxt,Sym(log),Var(x)),BinOp(juxt,Sym(ln),Var(y)))'],
+  // The call form is unaffected - the LPAREN check runs first.
+  ['sin(x)', 'Call(sin,[Var(x)])'],
+  ['gcd(a, b) = 1', 'Relation([=],[Call(gcd,[Var(a),Var(b)]),Num(1)])'],
+  // Not every `named` FUNCTION is an operator: choose/factorial are fixed-arity
+  // MathScript spellings of \binom and postfix `!` with no standalone glyph,
+  // so they keep falling through to the identifier path.
+  ['factorial', 'Ident(factorial)'],
+
+  // ---- T9.5 fix 3: LaTeX-style big-operator bounds ----
+  // `sum_(i=1)^(n)` used to leave `pos` on the `_`, so the ordinary script
+  // operators built `((sum)_{i=1})^{n}` out of the bare BigOp.
+  ['sum_(i=1)^(n) a_i',
+    'BinOp(juxt,BigOp(sum,Relation([=],[Var(i),Num(1)]),Var(n)),Sub(Var(a),Var(i)))'],
+  // ...and, because the Σ was buried in a Pow instead of heading the chain,
+  // makeFrac's big-operator rule stopped seeing it and the Σ was dragged into
+  // the numerator. It scopes over the fraction again.
+  ['sum_(n=1)^(inf) 1/n^2',
+    'BinOp(juxt,BigOp(sum,Relation([=],[Var(n),Num(1)]),Sym(inf)),Frac(Num(1),Pow(Var(n),Num(2))))'],
+  ['integral_(0)^(1) f(x) dx',
+    'BinOp(juxt,BinOp(juxt,BigOp(integral,Num(0),Num(1)),Call(f,[Var(x)])),Sym(dx))'],
+  // A lone `_(...)` is a lower bound with no upper one.
+  ['sum_(i) a_i', 'BinOp(juxt,BigOp(sum,Var(i),null),Sub(Var(a),Var(i)))'],
+  // The arrow spelling is checked FIRST, so `lim_(h -> 0)` still means one
+  // subscript with an arrow in it rather than a lower bound of `h -> 0`.
+  ['lim_(h -> 0) f(x)', 'BinOp(juxt,BigOp(lim,Var(h),Num(0)),Call(f,[Var(x)]))'],
+  ['sum(i=1 -> n) a_i',
+    'BinOp(juxt,BigOp(sum,Relation([=],[Var(i),Num(1)]),Var(n)),Sub(Var(a),Var(i)))'],
+
+  // ---- T9.5 fix 6: a bare sign IS the whole script ----
+  // The superscript-limit convention. The script argument used to reach past
+  // the sign for an operand and swallowed the binary '+' that followed.
+  ['a^+ + b^-', 'BinOp(+,Pow(Var(a),Sym(+)),Pow(Var(b),Sym(-)))'],
+  ['x -> 0^+', 'BinOp(to,Var(x),Pow(Num(0),Sym(+)))'],
+  ['a_-', 'Sub(Var(a),Sym(-))'],
+  // A sign that DOES have an operand is untouched: still the unary minus.
+  ['x^-1', 'Pow(Var(x),UnaryOp(neg,Num(1)))'],
+  ['x^-n', 'Pow(Var(x),UnaryOp(neg,Var(n)))'],
+  ['x^2', 'Pow(Var(x),Num(2))'],
+  ['a^b^c', 'Pow(Var(a),Pow(Var(b),Var(c)))'],
+
+  // ---- T9.5 fix 7: the ellipsis is one symbol ----
+  ['{1, ..., n}', 'SetLiteral([Num(1),Sym(...),Var(n)])'],
+  ['a_1 + ... + a_n', 'BinOp(+,BinOp(+,Sub(Var(a),Num(1)),Sym(...)),Sub(Var(a),Var(n)))'],
+  ['f(x_1, ..., x_n)', 'Call(f,[Sub(Var(x),Num(1)),Sym(...),Sub(Var(x),Var(n))])'],
+
+  // ---- T9.5 fix 1b: prose in a set-builder CONDITION ----
+  // `{n : n is prime}` is ordinary notation for a set whose membership test is
+  // a sentence; the words become one Text atom inside the set rather than
+  // splitting the braces across a run boundary (two Raw spans, two warnings).
+  ['{n : n is prime}', 'SetBuilder(Var(n),BinOp(juxt,Var(n),Text(" is prime")))'],
+  ['{x : x is positive}', 'SetBuilder(Var(x),BinOp(juxt,Var(x),Text(" is positive")))'],
+  ['{d : d divides n}',
+    'SetBuilder(Var(d),BinOp(juxt,BinOp(juxt,Var(d),Text(" divides ")),Var(n)))'],
+  // The condition's OWN vocabulary keeps the first say: `exists`, `in`,
+  // `suchthat` and `not` are English words this language also defines as
+  // symbols, and a `Math.*` member is not English just because it is in no
+  // table. None of these may turn into text.
+  ['{ x in Math.reals : exists n in Math.naturals suchthat |x| < 1/n }',
+    'SetBuilder(Relation([in],[Var(x),Sym(Math.reals)]),' +
+    'BinOp(seq,BinOp(juxt,Sym(exists),Relation([in],[Var(n),Sym(Math.naturals)])),' +
+    'BinOp(juxt,Sym(suchthat),Relation([<],[Abs(Var(x)),Frac(Num(1),Var(n))]))))'],
+  ['{x : not x in A}', 'SetBuilder(Var(x),UnaryOp(lnot,Relation([in],[Var(x),Var(A)])))'],
+  // The ELEMENT side is a term, not a sentence, and is deliberately untouched.
+  ['{ n^2 : n in Math.naturals }', 'SetBuilder(Pow(Var(n),Num(2)),Relation([in],[Var(n),Sym(Math.naturals)]))'],
 ];
 for (const [src, want] of EXTRA) {
   const { expr, diagnostics } = parse(src);

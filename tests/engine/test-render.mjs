@@ -450,8 +450,15 @@ const SCRIPT_CASES = [
   ['a_(ij)', String.raw`a_{ij}`],          // the parenthesized spelling agrees
   ['x^(ij)', String.raw`x^{ij}`],
   ['P_AB', String.raw`P_{\mathrm{AB}}`],   // a capital means a label, not indices
-  ['x_max', String.raw`x_{max}`],          // MATH_KEYWORDS -> Sym, unchanged
-  ['A_det', String.raw`A_{det}`],
+  // T9.5 fix 2: a bare named OPERATOR is the operator glyph wherever it
+  // appears, so these two are `\max`/`\det` (upright) rather than the literal
+  // letters `max`/`det` (which typeset italic, i.e. as a product of three
+  // variables). That is both the standard spelling of a maximum subscript and
+  // the conclusion this block's own rule was already reaching for when it
+  // exempted operator names from the italic-index treatment - the exemption
+  // now has an upright glyph to hand back instead of the bare word.
+  ['x_max', String.raw`x_{\max}`],
+  ['A_det', String.raw`A_{\det}`],
   ['speed = 1', String.raw`\mathrm{speed}=1`],  // out of a script, still \mathrm
 ];
 for (const [source, want] of SCRIPT_CASES) {
@@ -462,6 +469,100 @@ for (const [source, want] of SCRIPT_CASES) {
 // and the `_` then renders as a silent empty script (`a_{}\text{(ij) }=0`).
 checkExact('Scripts', 'a_(ij) = 0 - end to end, the script argument never leaves the math run',
   render('a_(ij) = 0').latex, String.raw`a_{ij}=0`);
+
+// ============================================
+// T9.5 - the realistic-document fixes, end to end
+//
+// Eight shapes that a real homework document produces constantly and that the
+// engine got wrong. Each has stage-level coverage already (lexer / parser /
+// disambiguator), and is pinned HERE too because a stage test proves the stage
+// does its part while only the whole pipeline proves the LaTeX a reader
+// actually sees. Every string below was read back out of the fixed engine and
+// checked against KaTeX (throwOnError) before being written down.
+// ============================================
+const T95_PINS = [
+  // -- fix 1: prose inside a set-builder CONDITION --
+  // Standard notation for a set whose membership test is a sentence. The words
+  // stay inside the braces as \text; before the fix the prose run split the
+  // braces and both halves came back as Raw, with two `could not parse`
+  // warnings. Delimiter spelling follows the existing set golden (#17):
+  // \left\{ ... \ \middle|\ ... \right\}.
+  ['{n : n is prime}', String.raw`\left\{n\ \middle|\ n\text{ is prime}\right\}`],
+  ['{d : d divides n}', String.raw`\left\{d\ \middle|\ d\text{ divides }n\right\}`],
+
+  // -- fix 2: a named operator used bare --
+  // `sin x` is the operator glyph applied by juxtaposition. As the bare letters
+  // `sin` it rendered `sinx` (no backslash, so cat() had no control word to
+  // space) AND typeset italic, i.e. as a product of three variables.
+  ['sin x + cos y', String.raw`\sin x+\cos y`],
+  ['det A', String.raw`\det A`],
+
+  // -- fix 3: LaTeX-style big-operator bounds --
+  // What a LaTeX-fluent user types. `_`/`^` used to be picked up by the
+  // ordinary script operators, building `((\sum)_{i=1})^{n}`; and with the Σ
+  // buried in a Pow rather than heading the juxtaposition chain, makeFrac's
+  // big-operator rule stopped seeing it and dragged the Σ into the numerator.
+  ['sum_(i=1)^(n) a_i', String.raw`\sum_{i=1}^{n} a_{i}`],
+  ['sum_(n=1)^(inf) 1/n^2', String.raw`\sum_{n=1}^{\infty}\frac{1}{n^{2}}`],
+
+  // -- fix 4: a possessive is one prose word --
+  // Split at the apostrophe it left `\text{By Euler}\texttt{'}s` behind, the
+  // quote stranded in a math run of its own.
+  ["By Euler's theorem x = 1", String.raw`\text{By Euler's theorem }x=1`],
+
+  // -- fix 5: the sentence colon --
+  // English punctuation introducing the mathematics. As math it opened a run
+  // beginning with a bare ':', recoverable only as Raw (`\texttt{:}`).
+  ['Note the following: x = 1', String.raw`\text{Note the following: }x=1`],
+
+  // -- fix 6: a bare sign IS the whole script --
+  // The superscript-limit convention. The script argument used to reach past
+  // the sign for an operand and swallowed the binary '+' that followed it.
+  ['a^+ + b^-', String.raw`a^{+}+b^{-}`],
+  ['x -> 0^+', String.raw`x\to 0^{+}`],
+
+  // -- fix 7: the ellipsis is one symbol --
+  // As three OP:'.' tokens the parser recovered the first as Raw and printed
+  // the other two literally (`\{1, \texttt{.}.., n\}`).
+  ['{1, ..., n}', String.raw`\{1, \ldots, n\}`],
+  ['a_1 + ... + a_n', String.raw`a_{1}+\ldots+a_{n}`],
+];
+for (const [source, want] of T95_PINS) {
+  const { latex, diagnostics } = render(source);
+  checkExact('T9.5', JSON.stringify(source), latex, want);
+  check('T9.5', `${JSON.stringify(source)} - compiles with zero diagnostics`,
+    diagnostics.length === 0, JSON.stringify(diagnostics.map((d) => d.message)));
+}
+
+// -- fix 8: a Scope/Subtask TITLE goes through the statement pipeline --
+// A title carrying notation used to print as an escaped token join
+// (`a \_ n = x \^{} n / factorial ( n )`). It now renders as a statement, with
+// its math segments in `$...$` because \textbf is a text-mode command and
+// KaTeX rejects `\textbf{a^{2}}` outright. A words-only title is unchanged -
+// still the single \text{} group every approved golden asserts, which is what
+// keeps the Bernoulli document golden above byte-identical.
+{
+  const { lines, diagnostics } = renderDoc(
+    'Problem 2 Series and the ratio test {\n' +
+    '  - Apply the test to a_n = x^n/factorial(n) {\n' +
+    '    ratio = 1/2\n' +
+    '  }\n' +
+    '  - base case {\n' +
+    '    x = 1\n' +
+    '  }\n' +
+    '}');
+  const content = lines.filter((l) => !l.latex.startsWith('\\rule'));
+  checkExact('T9.5', 'math-bearing subtask title renders through the statement pipeline',
+    content[1] ? content[1].latex : '<missing>',
+    String.raw`\quad \textbf{\text{(i) Apply the test to }$a_{n}=\frac{x^{n}}{n!}$\text{:}}`);
+  checkExact('T9.5', 'a words-only subtask title is untouched (one \\text group)',
+    content[3] ? content[3].latex : '<missing>', String.raw`\quad \textbf{\text{(ii) base case:}}`);
+  checkExact('T9.5', 'a words-only SCOPE title is untouched too',
+    content[0] ? content[0].latex : '<missing>',
+    String.raw`{\huge \textbf{\text{Problem 2 Series and the ratio test}}}`);
+  check('T9.5', 'the whole titled document compiles with zero diagnostics',
+    diagnostics.length === 0, JSON.stringify(diagnostics.map((d) => d.message)));
+}
 
 // ============================================
 // Robustness - renderStatement must never throw

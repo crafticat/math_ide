@@ -58,6 +58,15 @@ import { SCOPES, MATH_PACKAGE, FUNCTIONS } from './language';
 // for later pipeline stages to read via `(block as Block & StatementTokens).tokens`.
 export interface StatementTokens { tokens: Token[] }
 
+// The same idea for Scope & Subtask blocks: the tokens their TITLE was joined
+// from, kept alongside the joined `title` string. A title is prose most of the
+// time (`Theorem Bernoulli inequality`) and the string is exactly right for
+// it, but it can also carry notation (`- Apply the test to a_n = x^n/factorial(n) {`),
+// and printing THAT as an escaped token join gives `a \_ n = x \^{} n /
+// factorial ( n )`. The renderer decides which of the two a given title is;
+// this stage just makes sure the tokens are still available when it does.
+export interface TitleTokens { titleTokens: Token[] }
+
 // ---- Line splitting ----
 // A DocLine's `tokens` are the RAW tokens between two NEWLINEs (COMMENT
 // tokens still present - callers strip them where content is being
@@ -382,21 +391,23 @@ function parseBlockAt(
   // Rule 4: Scope open.
   const scopeMatch = matchScopeOpen(content);
   if (scopeMatch) {
-    const title = joinTokenTexts(expandMacros(scopeMatch.titleTokens, macroTokens));
+    const titleTokens = expandMacros(scopeMatch.titleTokens, macroTokens);
+    const title = joinTokenTexts(titleTokens);
     const { children, nextIdx, closed } = parseChildren(lines, idx + 1, macros, macroTokens, diagnostics, false);
     const endLine = lines[Math.min(nextIdx, lines.length) - 1] ?? line;
     const span = combineSpans(lineSpanBounds(line), lineSpanBounds(endLine));
     if (!closed) {
       diagnostics.push({ span: scopeMatch.nameTok.span, severity: 'info', message: `unclosed scope: ${scopeMatch.canonicalName}` });
     }
-    const block: Block = { kind: 'Scope', scopeType: scopeMatch.canonicalName, title, styling: scopeMatch.styling, children, span };
+    const block: Block & TitleTokens = { kind: 'Scope', scopeType: scopeMatch.canonicalName, title, styling: scopeMatch.styling, children, span, titleTokens };
     return { block, nextIdx };
   }
 
   // Rule 5: Subtask open.
   const subtaskMatch = matchSubtaskOpen(content);
   if (subtaskMatch) {
-    const title = joinTokenTexts(expandMacros(subtaskMatch.titleTokens, macroTokens));
+    const titleTokens = expandMacros(subtaskMatch.titleTokens, macroTokens);
+    const title = joinTokenTexts(titleTokens);
     const { children, nextIdx, closed } = parseChildren(lines, idx + 1, macros, macroTokens, diagnostics, false);
     const endLine = lines[Math.min(nextIdx, lines.length) - 1] ?? line;
     const span = combineSpans(lineSpanBounds(line), lineSpanBounds(endLine));
@@ -405,7 +416,7 @@ function parseBlockAt(
     if (!closed) {
       diagnostics.push({ span: lineSpanBounds(line), severity: 'info', message: 'unclosed subtask' });
     }
-    const block: Block = { kind: 'Subtask', depth: subtaskMatch.depth, title, children, span };
+    const block: Block & TitleTokens = { kind: 'Subtask', depth: subtaskMatch.depth, title, children, span, titleTokens };
     return { block, nextIdx };
   }
 

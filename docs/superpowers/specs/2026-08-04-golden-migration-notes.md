@@ -227,27 +227,48 @@ turned out to have frozen the wrong thing:
 ## Known limitations
 
 Real gaps, written down rather than left for the next reader to rediscover.
-None is a regression from legacy; all four are v2 behaviour as it ships today.
+None is a regression from legacy; each is v2 behaviour as it shipped at the
+time it was written down. Items struck through have since been fixed - kept on
+the list, not deleted, so the record of what was wrong and what closed it stays
+readable.
 
-1. **Prose inside set braces shatters the set.** `{x : x is prime}` does not
-   parse: the disambiguator sends `is prime` to prose, which splits the braces
-   across a run boundary, and the fragments come back as two Raw spans with two
-   `could not parse` warnings. `{x : x in A}` (no English) is fine. The
-   `(...)`-never-straddles-a-run rule (fix 3) has no `{...}` counterpart.
-2. **`fdot g` - the half-spelled dot product - is not recognized.** The lexer's
-   split (fix 1) matches exactly `letter + "dot" + letter`, so `fdotg` and
-   `f dot g` both give `f\cdot g` but `fdot g` gives `\text{fdot }g`. Narrow on
-   purpose (`dotted`, `adotbc` must not split), and the middle spelling falls
-   between the two rules.
-3. **Multi-char identifiers glue to their neighbours.** `x divides y` renders
-   `x\mathrm{divides}y` - no spacing, so it reads as a product of three
-   factors. `cat()` inserts a space only where LaTeX would otherwise mis-lex,
-   and `\mathrm{...}` never does; a word-shaped identifier between two
-   variables wants one anyway.
-4. ~~**`x_(ij)` silently loses its subscript.**~~ FIXED in this pass - see
-   engine fixes 10 and 11 above. `x_(ij)` now renders `x_{ij}`. Recorded here
-   because it was a silent wrong answer (no diagnostic), which is the failure
-   mode worth watching for in the other three.
+1. ~~**Prose inside set braces shatters the set.**~~ FIXED by the
+   realistic-document pass (T9.5 fix 1). `{n : n is prime}` now renders
+   `\left\{n\ \middle|\ n\text{ is prime}\right\}` with zero diagnostics. The
+   `(...)`-never-straddles-a-run rule finally got its `{...}` counterpart
+   (`attachSetBuilders` in disambiguate.ts, gated on the group actually being a
+   set-builder so a plain brace list like `{apples, oranges}` is unaffected),
+   and parser.ts's `parseCondition` turns the English the parser now receives
+   into the `\text{...}` it was always meant to be.
+2. **`fdot g` - the half-spelled dot product - is not recognized.** STILL OPEN.
+   The lexer's split (fix 1) matches exactly `letter + "dot" + letter`, so
+   `fdotg` and `f dot g` both give `f\cdot g` but `fdot g` gives
+   `\text{fdot }g`. Narrow on purpose (`dotted`, `adotbc` must not split), and
+   the middle spelling falls between the two rules. NOTE: the bare-named-
+   operator machinery added in T9.5 fix 2 does NOT close this, and was checked
+   against it directly - that fix gives a standalone glyph to entries of the
+   `FUNCTIONS` table (`sin`, `det`, `log`), whereas `fdot` is not a function at
+   all but a lexical shape the tokenizer declines to split. Different stage,
+   different problem.
+3. **Multi-char identifiers glue to their neighbours.** STILL OPEN. `x divides
+   y` renders `x\mathrm{divides}y` - no spacing, so it reads as a product of
+   three factors. `cat()` inserts a space only where LaTeX would otherwise
+   mis-lex, and `\mathrm{...}` never does; a word-shaped identifier between two
+   variables wants one anyway. (Inside a set-builder condition this no longer
+   bites - `{d : d divides n}` routes the word through `\text{ divides }` - but
+   in an ordinary statement it still does.)
+4. ~~**`x_(ij)` silently loses its subscript.**~~ FIXED in the corpus-migration
+   pass - see engine fixes 10 and 11 above. `x_(ij)` now renders `x_{ij}`.
+   Recorded here because it was a silent wrong answer (no diagnostic), which is
+   the failure mode worth watching for in the others.
+5. **A math keyword inside prose wins over the English word.** OPEN, found
+   while writing the realistic-document fixtures. `partial` and `sum` are
+   `MATH_KEYWORDS`, i.e. always math, so "the partial sums stay bounded"
+   renders `\partial\mathrm{sums}` and "the sum converges" renders `\sum`. No
+   diagnostic - another silent wrong answer, and the reason those two phrasings
+   are absent from `tests/engine/test-documents.mjs`. The `and`/`or`/`not`
+   context rule is the shape a fix would take, but the keyword set is large and
+   the fix is a scoring change, not a table edit, so it is scoped out here.
 
 ## Notes for later tasks
 
@@ -259,5 +280,11 @@ None is a regression from legacy; all four are v2 behaviour as it ships today.
   `node_modules` and FAILS if neither resolves. There is no skip path - a run
   that could not check LaTeX validity has not run the gate. (The APP still
   loads KaTeX from a CDN; the pin exists for the tests.)
+- `tests/engine/test-documents.mjs` (added by the realistic-document pass)
+  holds three full homework sheets - analysis, linear algebra, discrete - to
+  the same absolute bar: compile, ZERO diagnostics, and every rendered line
+  valid under KaTeX `throwOnError`. They are fixtures, not goldens: nothing is
+  pinned byte-for-byte, because a 50-line pinned document fails on every
+  deliberate improvement without telling anyone anything.
 - `test-advanced.mjs` is unchanged and still green against its inline copy;
   Task 12 documents what happens to it.

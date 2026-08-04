@@ -94,8 +94,12 @@ const BINDERS = new Set([
 // say nothing about whether the REST of the sentence is prose - so they must
 // not be allowed to poison hasProse for the whole statement (see buildContext).
 // Only the first word-token of a statement is ever checked against this set.
+// `let` belongs here for the same reason `assume`/`suppose` (already listed)
+// do: all three are BINDERS - they introduce the symbols that follow rather
+// than describing them, so "Let p and q be given" is no more evidence that the
+// rest of the line is English than "Assume p and q" is.
 const DISCOURSE_MARKERS = new Set([
-  'then', 'so', 'hence', 'thus', 'therefore', 'assume', 'suppose', 'note', 'recall', 'consider', 'clearly', 'since', 'because',
+  'let', 'then', 'so', 'hence', 'thus', 'therefore', 'assume', 'suppose', 'note', 'recall', 'consider', 'clearly', 'since', 'because',
 ]);
 
 // Auxiliary/copula verbs. When one of these follows `a`/`A`, the word is being
@@ -173,7 +177,7 @@ interface ParenFacts {
 interface Context extends ParenFacts {
   tokens: Token[];
   classes: StaticClass[];    // static class of every token
-  matchingParen: number[];   // LPAREN index -> its RPAREN index, else -1
+  matchingParen: number[];   // opener index (LPAREN or LBRACE) -> its closer index, else -1
   hasProse: boolean;         // statement contains at least one English-reading word
   hasQuantifier: boolean;    // statement contains forall/exists/suchthat/notin/=>/<=>
 }
@@ -389,7 +393,10 @@ function buildContext(tokens: Token[]): Context {
       const open = stack[stack.length - 1];
       if (open && ((open.kind === 'LPAREN' && t.kind === 'RPAREN') || (open.kind === 'LBRACE' && t.kind === 'RBRACE'))) {
         stack.pop();
-        if (t.kind === 'RPAREN') matchingParen[open.index] = i;
+        // Braces are recorded too (attachSetBuilders needs them); every reader
+        // of this array checks the OPENER's kind first, so the two bracket
+        // families cannot be confused for one another.
+        matchingParen[open.index] = i;
       }
     } else if (stack.length > 0) {
       const top = stack[stack.length - 1];
@@ -621,6 +628,50 @@ function attachParentheticals(ctx: Context, verdicts: Verdict[], recordAt: (Deci
   }
 }
 
+// The `{...}` counterpart of attachParentheticals, and it only ever resolves
+// ONE way: toward math.
+//
+// A set-builder whose condition is written out in words - `{n : n is prime}`,
+// `{x : x is positive}` - is ordinary mathematical notation, and the
+// convention is to typeset the words as text INSIDE the braces. But English
+// scored as prose, and a prose run in the middle of a brace group put a RUN
+// BOUNDARY between `{` and its partner: the parser then had an opening brace
+// with no closer and a closer with no opener, and reported both as Raw
+// (`{n : n is prime}` came back as two `\texttt{}` error spans and two
+// warnings). So the group goes to math whole, and parser.ts's parseCondition
+// turns the words it now receives into the `\text{...}` they were always
+// meant to be.
+//
+// Gated on the group actually BEING a set-builder (a top-level ':' or '|'
+// separator, which is what the parser looks for too): `{apples, oranges}` is
+// not one, and forcing a plain brace list to math would only turn its English
+// into upright identifiers with nothing to gain.
+function attachSetBuilders(ctx: Context, verdicts: Verdict[], recordAt: (DecisionRecord | null)[]): void {
+  const { tokens, matchingParen } = ctx;
+  for (let open = 0; open < tokens.length; open++) {
+    if (tokens[open].kind !== 'LBRACE') continue;
+    const close = matchingParen[open];
+    if (close < 0) continue;
+    let depth = 0;
+    let hasSeparator = false;
+    let proseWords = 0;
+    for (let k = open + 1; k < close; k++) {
+      const t = tokens[k];
+      if (t.kind === 'LPAREN' || t.kind === 'LBRACKET' || t.kind === 'LBRACE') depth++;
+      else if (t.kind === 'RPAREN' || t.kind === 'RBRACKET' || t.kind === 'RBRACE') depth = Math.max(0, depth - 1);
+      else if (depth === 0 && t.kind === 'OP' && (t.text === ':' || t.text === '|')) hasSeparator = true;
+      else if (t.kind === 'WORD' && verdicts[k] === 'prose') proseWords++;
+    }
+    if (!hasSeparator || proseWords === 0) continue;
+    for (let k = open + 1; k < close; k++) {
+      if (verdicts[k] === 'math') continue;
+      verdicts[k] = 'math';
+      const rec = recordAt[k];
+      if (rec) { rec.verdict = 'math'; rec.reasons.push('set-builder: kept inside its set'); }
+    }
+  }
+}
+
 // `,` `.` `;` `:` and stray PUNCT belong to the text they separate: prose when
 // every neighbour that exists reads as prose, math otherwise (so `[0,1]` and
 // `f(1, 2)` keep their commas, and a sentence keeps its full stop).
@@ -644,7 +695,16 @@ function attachPunctuation(ctx: Context, verdicts: Verdict[]): void {
     if (!isAttaching(t) && t.kind !== 'STRING') continue;
     const left = sideVerdict(i, -1);
     const right = sideVerdict(i, 1);
-    if (isAttaching(t)) next[i] = (left !== null || right !== null) && left !== 'math' && right !== 'math' ? 'prose' : 'math';
+    // The SENTENCE colon is the one attaching character whose left side alone
+    // settles it: "Note the following: x = 1" introduces the mathematics with
+    // a piece of English punctuation, so the colon belongs to the words even
+    // though what follows it is a formula. Left as math, it opened a math run
+    // of its own that began with a bare ':' - which the parser can only
+    // recover as Raw (`\texttt{:}`). A colon with math on its LEFT is
+    // untouched: that is the set-builder separator (`{n : n is prime}`) or a
+    // ratio, and both are notation.
+    if (t.kind === 'OP' && t.text === ':' && left === 'prose') next[i] = 'prose';
+    else if (isAttaching(t)) next[i] = (left !== null || right !== null) && left !== 'math' && right !== 'math' ? 'prose' : 'math';
     else if (left === 'math' && right === 'math') next[i] = 'math';
   }
   for (let i = 0; i < tokens.length; i++) verdicts[i] = next[i];
@@ -703,6 +763,7 @@ export function segment(tokens: Token[], diagnostics: Diagnostic[]): { runs: Run
   }
 
   attachParentheticals(ctx, verdicts, recordAt);
+  attachSetBuilders(ctx, verdicts, recordAt);
   attachPunctuation(ctx, verdicts);
   return { runs: assembleRuns(tokens, verdicts), explain };
 }

@@ -67,7 +67,12 @@ const isLetterOrDigit = (ch: string | undefined): boolean => isLetter(ch) || isD
 // below) - i.e. plain set membership - so no entry's position in its own
 // list can ever change which one matches; only the class-to-class order
 // (longest first) matters.
-const THREE_CHAR_OPS = ['<=>'];
+// '...' is here rather than in the PUNCT/single-'.' path because an ellipsis
+// is ONE symbol (`\ldots`) in `{1, ..., n}` / `a_1 + ... + a_n`, not three
+// sentence periods: as three separate OP:'.' tokens the parser recovered the
+// first one as Raw and printed the other two literally. Only the exact
+// three-dot spelling is a token - `..` stays two periods.
+const THREE_CHAR_OPS = ['<=>', '...'];
 const TWO_CHAR_OPS = ['=>', '->', '!=', '<=', '>=', '+-', '-+'];
 // '!' is in the list for the same reason "'" is: it is a real postfix
 // operator of the language (`(j-1)!`, `5!`), not stray punctuation. '!=' is
@@ -78,6 +83,20 @@ const SINGLE_CHAR_OPS = new Set(['=', '<', '>', '+', '-', '*', '/', '^', '_', "'
 // Rule 4's one word-splitting shape: `fdotg` -> `f dot g` (see the WORD
 // branch below). Anchored, so only a whole word of exactly this shape splits.
 const GLUED_DOT = /^([A-Za-z])dot([A-Za-z])$/;
+
+// Rule 4's other word-joining shape: an English CONTRACTION or POSSESSIVE
+// (`Euler's`, `don't`, `it's`) is ONE word, not a word followed by the prime
+// operator - split in three it left `\text{By Euler}\texttt{'}s` behind, the
+// apostrophe stranded in a math run of its own.
+//
+// Like GLUED_DOT this is a pure SHAPE test (the lexer knows no vocabulary),
+// and deliberately narrow so it can never swallow a derivative:
+//   * the base must be at least TWO characters, so `F'`/`f'` are untouched;
+//   * everything must be written tight, no spaces anywhere;
+//   * the tail must be exactly one of the English contraction suffixes, so
+//     `Aut'(G)` (next char is `(`) and `phi' = 0` (nothing after the quote)
+//     are untouched too.
+const CONTRACTION_SUFFIXES = new Set(['s', 't', 'd', 'm', 'll', 're', 've']);
 
 const BRACKETS: Partial<Record<string, TokenKind>> = {
   '(': 'LPAREN', ')': 'RPAREN',
@@ -207,9 +226,24 @@ export function lex(source: string): { tokens: Token[]; diagnostics: Diagnostic[
         push('WORD', glued[1], lineSpan(startCol, startCol + 1));
         push('WORD', 'dot', lineSpan(startCol + 1, startCol + 4));
         push('WORD', glued[2], lineSpan(startCol + 4, startCol + 5));
-      } else {
-        push('WORD', word, lineSpan(startCol, col));
+        continue;
       }
+      // Contraction / possessive (see CONTRACTION_SUFFIXES): absorb `'tail`
+      // into the word when the whole thing is written tight and `tail` is a
+      // contraction suffix. The lookahead reads `text` directly (it does not
+      // move `i`/`col`) so a non-match costs nothing to abandon; the scan runs
+      // over letters AND digits so a tail like `s2` fails the set membership
+      // instead of matching on its `s` prefix.
+      if (word.length >= 2 && text[i] === "'") {
+        let k = i + 1;
+        while (isLetterOrDigit(text[k])) k++;
+        if (CONTRACTION_SUFFIXES.has(text.slice(i + 1, k).toLowerCase())) {
+          advance(k - i);
+          push('WORD', text.slice(start, i), lineSpan(startCol, col));
+          continue;
+        }
+      }
+      push('WORD', word, lineSpan(startCol, col));
       continue;
     }
 

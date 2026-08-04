@@ -125,7 +125,11 @@ function checkInvariants(group, label, { tokens, runs, explain }) {
   const bad = [];
   for (const rec of explain) {
     for (const reason of rec.reasons) {
-      if (/^(absolute|parenthetical|default):/.test(reason)) continue;
+      // The reason grammar: either `<feature>(<weight>)`, or one of the
+      // post-scoring override prefixes. `set-builder:` is the newest of them
+      // (T9.5 fix 1b - a set-builder's condition keeps its English rather than
+      // letting a prose run split the braces).
+      if (/^(absolute|parenthetical|set-builder|default):/.test(reason)) continue;
       const m = /^([a-zA-Z]+)(?:-(?:left|right))?\(([+-]\d+)\)$/.exec(reason);
       if (!m) { bad.push(`malformed reason "${reason}"`); continue; }
       if (!(m[1] in WEIGHTS)) { bad.push(`unknown feature "${m[1]}"`); continue; }
@@ -215,6 +219,39 @@ const CASES = [
   // bonus. `choose` in real call form is unaffected.
   ['we choose x in A', { we: 'prose', choose: 'prose', x: 'math', in: 'math', A: 'math' }],
   ['choose(n, k) = 10', { choose: 'math', n: 'math', k: 'math' }],
+
+  // ---- T9.5 fix 1a: `let` is a BINDER, so it joins the discourse markers ----
+  // "Let x in A and ..." introduces the symbols that follow; it is no more
+  // evidence that the rest of the line is English than the "Assume ..." case
+  // above (which is the same sentence with the same expected verdicts).
+  ['Let x in A and y in B => x + y in A union B',
+    { Let: 'prose', x: 'math', in: 'math', A: 'math', and: 'math', y: 'math', union: 'math' }],
+  // ...and it is not an escape hatch either: the golden at the top of this
+  // table ("Let a and b be real numbers ...") still reads `and` as prose,
+  // because "be real numbers" earns that verdict on its own.
+
+  // ---- T9.5 fix 1b: a set-builder is never split by the English in it ----
+  // The words of a written-out membership condition stay INSIDE the braces.
+  // Scored on their own they read as prose, and a prose run between `{` and
+  // `}` put a run boundary there: the parser then had an opening brace with no
+  // closer and reported both halves as Raw.
+  ['{n : n is prime}', { n: 'math', is: 'math', prime: 'math' }],
+  ['Let A = {x : x is positive}',
+    { Let: 'prose', A: 'math', x: 'math', is: 'math', positive: 'math' }],
+  ['{d : d divides n}', { d: 'math', divides: 'math', n: 'math' }],
+  // ...but only for a SET-BUILDER. A plain brace list has no condition to
+  // write out, so forcing its words to math would gain nothing.
+  ['{apples, oranges}', { apples: 'prose', oranges: 'prose' }],
+
+  // ---- T9.5 fix 4: a possessive is one prose word ----
+  ["By Euler's theorem x = 1",
+    { By: 'prose', "Euler's": 'prose', theorem: 'prose', x: 'math' }],
+  // The derivative is untouched (the lexer never merged it in the first place).
+  ["F'(x) = 2x", { F: 'math', x: 'math' }],
+
+  // ---- T9.5 fix 5: the sentence colon ----
+  ['Note the following: x = 1',
+    { Note: 'prose', the: 'prose', following: 'prose', x: 'math' }],
 ];
 
 const results = new Map();
@@ -293,6 +330,37 @@ for (const [src, wantKinds] of [
   const { runs } = results.get("F'(area) = 1");
   check('Runs', "\"F'(area) = 1\" - a prime before the paren does not shatter the call (single math run)",
     runs.length === 1 && runs[0].kind === 'math', runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
+}
+// T9.5, at the run level: the three fixes below all exist to stop a run
+// boundary landing where the parser cannot recover from it.
+{
+  // fix 1b - the braces and everything between them are ONE math run, so the
+  // parser sees a balanced `{...}` and can build a SetBuilder out of it.
+  const { runs } = results.get('{n : n is prime}');
+  check('Runs', '"{n : n is prime}" - the whole set is a single math run (braces never straddle)',
+    runs.length === 1 && runs[0].kind === 'math', runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
+}
+{
+  const { runs } = results.get('Let A = {x : x is positive}');
+  check('Runs', '"Let A = {x : x is positive}" - prose lead-in, then one math run holding the whole set',
+    kindsOf(runs).join(' ') === 'prose math' && textOf(runs[1]) === 'A = { x : x is positive }',
+    runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
+}
+{
+  // fix 4 - the apostrophe joins the words instead of opening a math run of
+  // its own between "Euler" and "s".
+  const { runs } = results.get("By Euler's theorem x = 1");
+  check('Runs', '"By Euler\'s theorem x = 1" - possessive stays in the prose run',
+    kindsOf(runs).join(' ') === 'prose math' && textOf(runs[0]) === "By Euler's theorem",
+    runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
+}
+{
+  // fix 5 - a sentence colon attaches to the words on its left, so the math
+  // run does not begin with a bare ':' the parser can only recover as Raw.
+  const { runs } = results.get('Note the following: x = 1');
+  check('Runs', '"Note the following: x = 1" - the colon attaches to the prose',
+    kindsOf(runs).join(' ') === 'prose math' && textOf(runs[0]) === 'Note the following :',
+    runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
 }
 {
   const { runs } = results.get("F''(x) = 0");
