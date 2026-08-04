@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:engine": "node tests/engine/test-language.mjs && node tests/engine/test-lexer.mjs && node tests/engine/test-document.mjs && node tests/engine/test-parser.mjs && node tests/engine/test-disambiguate.mjs && node tests/engine/test-render.mjs && node tests/engine/test-engine-api.mjs && node tests/engine/test-corpus.mjs && node tests/engine/test-fuzz.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.555.0",

@@ -156,7 +156,34 @@ const ESCAPES: Record<string, string> = {
   '\\': '\\textbackslash ', '{': '\\{', '}': '\\}', '$': '\\$', '&': '\\&',
   '#': '\\#', '^': '\\^{}', '_': '\\_', '%': '\\%', '~': '\\~{}',
 };
-const escapeLatex = (s: string): string => s.replace(/[\\{}$&#^_%~]/g, (ch) => ESCAPES[ch]);
+// Two Unicode shapes that are well-formed JS strings - so they survive the
+// lexer/parser untouched and land verbatim in a Raw/Text node's text - but
+// are not valid on their own once dropped into a \text{}/\texttt{} group,
+// where KaTeX's PARSER (not just its font metrics) rejects them outright; a
+// merely-unrenderable character (an emoji, say) just warns and draws a
+// missing-glyph box, which is fine, but these two THROW even with
+// strict:false:
+//   * one or more combining marks (Unicode category M) at the very START of
+//     the group have no preceding base character to attach to within that
+//     group - and, verified directly against katex.renderToString, NEITHER
+//     does inserting one: a plain space does not work as a base either
+//     (KaTeX's parser wants an actual character there, not just something
+//     before the mark in the source), so the mark is dropped instead. Only
+//     the LEADING run is touched - `á` (an "a" with a combining
+//     acute) renders fine, because `a` itself is a valid base; this is
+//     reachable even from ordinary input because the disambiguator/parser
+//     can split a real base character into an earlier, different segment
+//     (`x` followed by stray combining accents becomes Var("x") plus a
+//     SEPARATE Raw run that starts with the accents, the base long gone).
+//   * an unpaired UTF-16 surrogate (half of a truncated astral character -
+//     reachable from malformed paste input) is not a valid Unicode scalar
+//     value at all. A genuine surrogate PAIR (a real emoji) is untouched by
+//     this regex and only ever hits the harmless missing-metrics case above.
+const LEADING_COMBINING_MARKS = /^\p{M}+/u;
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+function escapeLatex(s: string): string {
+  return s.replace(LEADING_COMBINING_MARKS, '').replace(LONE_SURROGATE, '�').replace(/[\\{}$&#^_%~]/g, (ch) => ESCAPES[ch]);
+}
 
 // ================= the spacing primitive =================
 
@@ -208,9 +235,24 @@ export function childrenOf(e: Expr): Expr[] {
 }
 
 /** True when the subtree contains something that needs vertical room, so the
- *  parens/brackets around it must grow. */
+ *  parens/brackets around it must grow. Memoized (by Expr object identity,
+ *  never mutated once built - safe as a cache key for the object's whole
+ *  lifetime) because callers that walk a script chain (scriptBase's
+ *  closesScriptChain, below) ask this same question about the same base
+ *  repeatedly, once per enclosing level; without the cache each of those
+ *  calls independently re-walks the WHOLE subtree beneath it, turning an
+ *  O(depth) chain walk into an O(depth^2) one - and scriptBase's own
+ *  exposedKinds recursion (also O(depth)) calls THIS at every one of its
+ *  own steps, compounding that to O(depth^3) overall: a 200-deep alternating
+ *  `x^a_b^a_b...` chain measured at 344ms, over the fuzz suite's 250ms
+ *  budget, before this cache. */
+const tallCache = new WeakMap<Expr, boolean>();
 function containsTall(e: Expr): boolean {
-  return TALL_KINDS.has(e.kind) || childrenOf(e).some(containsTall);
+  const cached = tallCache.get(e);
+  if (cached !== undefined) return cached;
+  const result = TALL_KINDS.has(e.kind) || childrenOf(e).some(containsTall);
+  tallCache.set(e, result);
+  return result;
 }
 
 /** A Frac nested inside this operand, reachable WITHOUT leaving the visual
@@ -466,21 +508,73 @@ function renderGroup(e: Expr & { kind: 'Group' }, ctx: Ctx): string {
 // halfway up it (`\left(\sqrt{\frac{a+b}{c+d}}\right)^{2}`); a bare infix
 // expression gets plain braces so the script applies to all of it.
 //
-// `own` is which of Pow/Sub is doing the wrapping. A base that is itself the
-// SAME kind of script also gets braced: a parenthesized script argument
-// closes off the parser's right-assoc chain (see parser.ts's header), so
-// `x^(a)^(b)` parses LEFT-nested - Pow(base: Pow(x,a), exp: b) - and the
-// bare concatenation `x^{a}^{b}` is a KaTeX "Double superscript" error;
-// bracing the base fixes it: `{x^{a}}^{b}`. A DIFFERENT kind of script
-// underneath (`a_i^2` = Pow(base: Sub(a,i), exp: 2)) is not ambiguous to
-// KaTeX and must stay bare to match the approved golden, which is why this
-// is `base.kind === own`, not "base.kind is Pow or Sub".
+// `own` is which of Pow/Sub is doing the wrapping. Beyond the tall/delimited
+// cases above, `base` gets braced exactly when rendering it BARE would leave
+// an `own`-kind script exposed at ITS OWN outermost level - i.e. gluing the
+// new script straight onto base's rendering would collide with one already
+// sitting there (see bracesBase/exposedKinds below). A parenthesized script
+// argument closes off the parser's right-assoc chain (see parser.ts's
+// header), so `x^(a)^(b)` parses LEFT-nested - Pow(base: Pow(x,a), exp: b) -
+// and the bare concatenation `x^{a}^{b}` is a KaTeX "Double superscript"
+// error; bracing the base fixes it: `{x^{a}}^{b}`. A DIFFERENT kind of
+// script underneath (`a_i^2` = Pow(base: Sub(a,i), exp: 2)) is not ambiguous
+// to KaTeX and must stay bare to match the approved golden - ONE sub and ONE
+// sup on the same atom is fine in either order.
+//
+// But that atom's two script slots are now BOTH full, and a base is not
+// only its OWN kind away from a collision: `x^a_b^a_b` (alternating Pow/
+// Sub) parses as Pow(base: Sub(base: Pow(x,a), sub: b), exp: a) - the outer
+// Pow's base is a Sub, a DIFFERENT kind, so the old `base.kind === own`
+// check waved it through bare, giving `x^{a}_{b}^{a}` - TWO superscripts on
+// `x`, KaTeX error, even though no two ADJACENT nodes in the tree share a
+// kind. exposedKinds walks past an unbraced base to see what IT exposes too,
+// so this braces at the right point: `{x^{a}_{b}}^{a}`.
 function scriptBase(base: Expr, ctx: Ctx, own: 'Pow' | 'Sub'): string {
   const latex = render(base, ctx);
   if (SELF_DELIMITED.has(base.kind)) return latex;
   if (containsTall(base)) return `\\left(${latex}\\right)`;
-  if (base.kind === 'BinOp' || base.kind === 'Relation' || base.kind === 'UnaryOp' || base.kind === own) return `{${latex}}`;
+  if (bracesBase(base, own)) return `{${latex}}`;
   return latex;
+}
+
+// True when `e`, rendered bare as one side of a script attachment, gets its
+// OWN delimiters or braces from scriptBase regardless of which script is
+// asking - i.e. nothing of e's is left exposed for a script glued directly
+// after it to collide with.
+const closesScriptChain = (e: Expr): boolean =>
+  SELF_DELIMITED.has(e.kind) || containsTall(e) || e.kind === 'BinOp' || e.kind === 'Relation' || e.kind === 'UnaryOp';
+
+// Whether scriptBase (above) would brace `base` as the operand of an `own`
+// script: never when closesScriptChain already handles it (that base gets
+// its OWN wrapping there), otherwise exactly when `own` is one of the kinds
+// exposedKinds finds already exposed at base's outermost level.
+function bracesBase(base: Expr, own: 'Pow' | 'Sub'): boolean {
+  return closesScriptChain(base) ? false : exposedKinds(base).has(own);
+}
+
+// The script kinds ('Pow' and/or 'Sub') exposed at `e`'s OWN outermost level
+// when it is rendered bare - what a NEW script glued directly onto e's
+// rendering would collide with. Empty for anything but Pow/Sub: every other
+// kind either carries no script at all, or (closesScriptChain) is always
+// wrapped by scriptBase, which closes the chain there and exposes nothing
+// further up.
+//
+// A SINGLE linear recursion down e.base: this must call itself (or
+// anything that transitively calls back into itself) AT MOST ONCE per
+// level. bracesBase and exposedKinds look like they could shell out to one
+// another - "is base already braced" vs. "what does base expose" are almost
+// the same question - but computing one FROM the other at every level, as
+// an earlier version of this function did, revisits the SAME base twice per
+// level, and that redundancy compounds: two calls at level k each make two
+// more at level k-1, ... giving O(2^N) instead of O(N^2) for a chain of N
+// scripts - which is exactly the shape `x^a_b^a_b^a_b...` has, and hung the
+// fuzz suite on a 150-deep one. Kept as a plain recursion (no memo table)
+// because O(N^2) is already well under budget at the depths real input
+// reaches (the fuzz suite's own generator caps a line at 30 fragments).
+function exposedKinds(e: Expr): Set<'Pow' | 'Sub'> {
+  if (e.kind !== 'Pow' && e.kind !== 'Sub') return new Set();
+  const inherited = closesScriptChain(e.base) ? new Set<'Pow' | 'Sub'>() : exposedKinds(e.base);
+  return inherited.has(e.kind) ? new Set([e.kind]) : new Set([...inherited, e.kind]);
 }
 
 function renderBigOp(e: Expr & { kind: 'BigOp' }, ctx: Ctx): string {

@@ -534,6 +534,66 @@ for (const source of ROBUST) {
   check('Robust', 'unclosed scopes at EOF still render, with unique ids', ok, detail);
 }
 
+// ============================================
+// Fuzz-discovered fixes (Task 9's fuzz + KaTeX-validation suite,
+// tests/engine/test-fuzz.mjs) - each pinned here, byte-for-byte, so a
+// regression is caught at THIS suite instead of only by re-running the
+// (randomized, seeded-but-not-targeted-at-these-shapes) fuzz suite. None of
+// these three came from the fuzz suite's own random generator - they came
+// from adversarial inputs constructed by hand while investigating why a
+// suite that size found nothing on its first run; see the Task 9 report.
+// ============================================
+{
+  // `x^a_b^a_b` parses as Pow(base: Sub(base: Pow(base: Sub(x,a)... - the
+  // SECOND Pow's base (a Sub) already exposes a Pow two levels further down,
+  // from THAT Sub's own base - which the old bracing rule
+  // (`base.kind === own`, i.e. only bracing a base of the exact SAME script
+  // kind) missed entirely, since the immediate base here is a Sub, not a
+  // Pow. Bare, that rendered `x^{a}_{b}^{a}_{b}` - two `^` on the same atom,
+  // a KaTeX "Double superscript" error. render.ts's scriptBase now asks
+  // exposedKinds, which walks past an unbraced base to see what IT exposes
+  // too, not just its own immediate kind.
+  const { latex } = render('x^a_b^a_b');
+  checkExact('Fuzz-fix', 'alternating Pow/Sub chain braces a collision two levels down, not just same-kind ones',
+    latex, String.raw`{x^{a}_{b}}^{a}_{b}`);
+}
+{
+  // Orphaned leading combining marks (here: U+0301 COMBINING ACUTE ACCENT,
+  // stranded in their own Raw run once `x` is consumed elsewhere as its own
+  // Var) have no base character to attach to inside \texttt{}/\text{} -
+  // and KaTeX's PARSER rejects that outright ("Expected EOF"), not just as
+  // a missing-glyph warning (checked directly against katex.renderToString
+  // while diagnosing this - see test-fuzz.mjs's KaTeX gate). A bare space
+  // does NOT fix it either: KaTeX's parser wants an actual character
+  // there, not just something earlier in the source, so escapeLatex drops
+  // the leading run instead of padding it.
+  const COMBINING = '́́́'; // three combining acute accents, no base of their own
+  const { latex } = render(`x${COMBINING} = 1`);
+  check('Fuzz-fix', 'leading combining marks in a Raw run are dropped, not left orphaned',
+    !latex.includes(COMBINING), latex);
+}
+{
+  // An unpaired UTF-16 surrogate (reachable from malformed/truncated paste
+  // input) is not a valid Unicode scalar value on its own; KaTeX's parser
+  // rejects it too. A genuine surrogate PAIR (a real emoji) is untouched by
+  // this and only ever hits the harmless missing-glyph-metrics case.
+  // escapeLatex replaces a lone one with U+FFFD, the standard placeholder.
+  const LONE_HIGH_SURROGATE = '\uD83D';
+  const { latex } = render(`x = ${LONE_HIGH_SURROGATE} + 1`);
+  check('Fuzz-fix', 'a lone UTF-16 surrogate is replaced with U+FFFD, not passed through raw',
+    !latex.includes(LONE_HIGH_SURROGATE) && latex.includes('�'), latex);
+}
+{
+  // The bracing fix must not touch anything the OLD `base.kind === own`
+  // rule already got right - re-pin the two existing script-chain goldens
+  // from the EXPR_CASES table above (independently, so a regression here
+  // fails with an obvious label instead of a cryptic diff further up).
+  check('Fuzz-fix', 'same-kind chain x^(a)^(b) is unaffected: still {x^{a}}^{b}',
+    render('x^(a)^(b)').latex === String.raw`{x^{a}}^{b}`, render('x^(a)^(b)').latex);
+  check('Fuzz-fix', 'mixed-kind-but-single-level a_i^2 is unaffected: still bare a_{i}^{2}',
+    render('a_i^2').latex === String.raw`a_{i}^{2}`, render('a_i^2').latex);
+}
+
 // Diagnostics from the parse/segment stages flow through the array parameter.
 {
   const { diagnostics } = render('x^2 + sqrt(');
