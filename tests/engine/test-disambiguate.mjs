@@ -55,6 +55,17 @@ check('Bundle', 'module exports a single flat WEIGHTS table of numbers',
   !!WEIGHTS && typeof WEIGHTS === 'object' && Object.keys(WEIGHTS).length > 0 &&
   Object.values(WEIGHTS).every((v) => typeof v === 'number'), JSON.stringify(WEIGHTS));
 
+// Quality review #4: fire()'s sign formatting is `weight >= 0 ? '+' : ''` -
+// mirrored here so a regression back to `weight > 0` is caught even though no
+// CURRENT WEIGHTS entry is 0. `feature(0)` (no sign) would fail the
+// checkInvariants reason regex below; `feature(+0)` passes it.
+{
+  const REASON_RE = /^([a-zA-Z]+)(?:-(?:left|right))?\(([+-]\d+)\)$/;
+  const fireFormat = (weight) => `probe(${weight >= 0 ? '+' : ''}${weight})`;
+  check('Weights', 'a zero-weight reason renders as "probe(+0)" and the invariant regex accepts it',
+    fireFormat(0) === 'probe(+0)' && REASON_RE.test(fireFormat(0)), fireFormat(0));
+}
+
 // ============================================
 // Helpers
 // ============================================
@@ -179,6 +190,31 @@ const CASES = [
   ['Suppose a sequence converges', { Suppose: 'prose', a: 'prose', sequence: 'prose', converges: 'prose' }],
   ['Find a real number x', { Find: 'prose', a: 'prose', real: 'prose', number: 'prose', x: 'math' }],
   ['Show a counterexample', { Show: 'prose', a: 'prose', counterexample: 'prose' }],
+
+  // Fix C (quality review #1): two divergent definitions of "call" used to
+  // exist - a prime between a WORD and its `(` (`F'(area)`) was recognized by
+  // absoluteOf (which scans FORWARD from the word, through primes) but not by
+  // buildContext's stack (which only checked ONE token back from the paren,
+  // landing on the prime instead of the word) - so the call's own argument
+  // fell back to ordinary scoring (`area` -> unknownMultiChar -> prose) and
+  // shattered the run. Both now read one shared call-paren set.
+  ["F'(area) = 1", { F: 'math', area: 'math' }],
+  ["F''(x) = 0", { F: 'math', x: 'math' }],
+
+  // Fix D (quality review #2): a single-LETTER call absolute now requires
+  // SPAN adjacency all the way to the paren - a space before `(` means an
+  // English sentence hit a parenthetical remark, not a call. FUNCTIONS names
+  // stay lenient about spacing (unaffected: `choose(n, k)` below).
+  ['We have a (possibly empty) set',
+    { We: 'prose', have: 'prose', a: 'prose', possibly: 'prose', empty: 'prose', set: 'prose' }],
+  ['Choose a (rational) number', { Choose: 'prose', a: 'prose', rational: 'prose', number: 'prose' }],
+  ['a(n) = n^2', { a: 'math', n: 'math' }],
+
+  // Fix E (quality review #7): choose/show/find/note double as common
+  // English verbs - bare (no parens) they must not get the bareKeyword math
+  // bonus. `choose` in real call form is unaffected.
+  ['we choose x in A', { we: 'prose', choose: 'prose', x: 'math', in: 'math', A: 'math' }],
+  ['choose(n, k) = 10', { choose: 'math', n: 'math', k: 'math' }],
 ];
 
 const results = new Map();
@@ -251,6 +287,49 @@ for (const [src, wantKinds] of [
     kindsOf(runs).join(' ') === 'prose math' && textOf(runs[1]) === 'p and q => r or not s',
     runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
 }
+{
+  // Fix C at the run level (quality review #1): a prime between the word and
+  // its paren must not shatter the call's own argument back into prose.
+  const { runs } = results.get("F'(area) = 1");
+  check('Runs', "\"F'(area) = 1\" - a prime before the paren does not shatter the call (single math run)",
+    runs.length === 1 && runs[0].kind === 'math', runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
+}
+{
+  const { runs } = results.get("F''(x) = 0");
+  check('Runs', "\"F''(x) = 0\" - two primes before the paren, still one math run",
+    runs.length === 1 && runs[0].kind === 'math', runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
+}
+{
+  // Fix D at the run level (quality review #2): a non-adjacent paren after a
+  // single letter is a parenthetical remark, not a call - the whole sentence
+  // (including the letter) collapses to one clean prose run.
+  const { runs } = results.get('We have a (possibly empty) set');
+  check('Runs', '"We have a (possibly empty) set" - a space before `(` means a parenthetical remark, not a call (single prose run)',
+    runs.length === 1 && runs[0].kind === 'prose', runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
+}
+{
+  const { runs } = results.get('Choose a (rational) number');
+  check('Runs', '"Choose a (rational) number" - collapses to a single prose run',
+    runs.length === 1 && runs[0].kind === 'prose', runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
+}
+{
+  const { runs } = results.get('a(n) = n^2');
+  check('Runs', '"a(n) = n^2" - a paren directly adjacent to a single letter is still a real call (single math run)',
+    runs.length === 1 && runs[0].kind === 'math', runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
+}
+{
+  // Fix E at the run level (quality review #7): bare "choose" joins the prose
+  // lead-in instead of splitting off into its own math island.
+  const { runs } = results.get('we choose x in A');
+  check('Runs', '"we choose x in A" - bare "choose" reads as prose, joining the lead-in instead of splitting the formula',
+    kindsOf(runs).join(' ') === 'prose math' && textOf(runs[0]) === 'we choose' && textOf(runs[1]) === 'x in A',
+    runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
+}
+{
+  const { runs } = results.get('choose(n, k) = 10');
+  check('Runs', '"choose(n, k) = 10" - real call form is unaffected by the bareKeyword carve-out (single math run)',
+    runs.length === 1 && runs[0].kind === 'math', runs.map((r) => `[${r.kind} ${textOf(r)}]`).join(''));
+}
 
 // Punctuation attachment: a comma between two prose words stays in the prose
 // run; a comma between numbers stays math; a trailing period follows its
@@ -299,6 +378,17 @@ for (const [src, wantKinds] of [
   const r = run('We know $x^2$ is positive');
   check('Quotes', 'a MATH_QUOTE inside prose is its own math run',
     kindsOf(r.runs).join(' ') === 'prose math prose', r.runs.map((x) => `[${x.kind} ${textOf(x)}]`).join(''));
+}
+{
+  // Quality review #3: attachPunctuation's doc comment used to claim
+  // `x = "by parts"` "stays inside the math run as a Text atom" - but with
+  // nothing after the STRING, it has no right neighbour to satisfy that test
+  // and actually becomes its own trailing prose run (see the test above).
+  // This is the comment's REPLACEMENT example: a STRING with math on BOTH
+  // sides genuinely does stay inside a single math run.
+  const r = run('x = "by parts" + 1');
+  check('Quotes', 'a STRING between two math tokens stays inside the math run',
+    r.runs.length === 1 && r.runs[0].kind === 'math', r.runs.map((x) => `[${x.kind} ${textOf(x)}]`).join(''));
 }
 {
   const r = run('The claim p AND q holds');

@@ -103,15 +103,46 @@ const DISCOURSE_MARKERS = new Set([
 // articleA override below must not fire - this is what separates "Let a be a
 // real number" (first `a`: variable) from "Suppose a sequence converges" /
 // "Find a real number x" (both: `a` is the English article, binder or not).
+// Deliberately a separate, smaller set from language.ts's STOP_WORDS (which
+// also lists be/is/are/have/... among many other English words that have
+// nothing to do with predication): STOP_WORDS answers "does this word read
+// as English" for absolute classification; AUX_VERBS answers the narrower
+// "is this SPECIFICALLY an auxiliary/copula verb" for the articleA veto.
+// Same overlap-but-different-job relationship as VERB_FUNCTIONS below.
 const AUX_VERBS = new Set([
   'be', 'is', 'are', 'was', 'were', 'has', 'have', 'had', 'does', 'do',
   'can', 'could', 'will', 'would', 'may', 'might', 'must', 'shall', 'should',
 ]);
 
+// FUNCTIONS names that are ALSO common English verbs. Used bare (no parens),
+// the English reading is at least as likely as the math one ("we choose x in
+// A", "we show that...", "we find a counterexample", "note that..."), so
+// bareKeyword must not fire for them - they fall through to unknownMultiChar
+// like any other ordinary word and let the neighbourhood decide instead.
+// (`show`/`find` are additionally absolute STOP_WORDS and never reach this
+// check at all; `note` is not a FUNCTIONS name. All four are kept here
+// together because this set is the definitive list of verb/function-name
+// collisions this file resolves in favour of scoring, not table membership -
+// only `choose` is a live branch today, but the list documents the intent
+// for the other three too.) A real call - `choose(n, k)` - is unaffected: it
+// is decided by the call-form absolute before scoring ever runs.
+const VERB_FUNCTIONS = new Set(['choose', 'show', 'find', 'note']);
+
 // OP texts that read as mathematics when they sit next to an ambiguous word.
 const MATH_OPS = new Set(['=', '+', '-', '*', '/', '^', '_', '<', '>', '<=', '>=', '!=', '->', '=>', '<=>', '+-', '-+', '|', "'"]);
 
-// Sentence-level evidence for quantifierContext.
+// Sentence-level evidence for quantifierContext. `in` and `subset` are
+// deliberately NOT here, even though both are otherwise-unambiguous relation
+// words (see RELATION_WORDS in language.ts): `in`'s own inMembership/inProse
+// features already read its local shape decisively (see the `w === 'in'`
+// block below), and both routinely show up ONCE inside an otherwise
+// prose-heavy sentence ("Let A be a subset of B, and suppose x and y are
+// elements...", "x in the following section") - letting either flip
+// hasQuantifier for the WHOLE statement would be blanket in-evidence that
+// over-triggers the quantifierContext bonus for unrelated ambiguous words
+// elsewhere in that same sentence. `implies`/`iff`, by contrast, are used
+// exclusively in already-formal quantified/logical constructions, so their
+// mere presence is safe to treat as sentence-wide evidence of a formula.
 const QUANTIFIER_WORDS = new Set(['forall', 'exists', 'suchthat', 'notin', 'implies', 'iff']);
 const QUANTIFIER_OPS = new Set(['=>', '<=>']);
 
@@ -130,7 +161,8 @@ interface Context {
   tokens: Token[];
   classes: StaticClass[];    // static class of every token
   inCallArgs: boolean[];     // token sits inside the parens of a function call
-  matchingParen: number[];   // LPAREN index -> its RPAREN index (and back), else -1
+  matchingParen: number[];   // LPAREN index -> its RPAREN index, else -1
+  callParens: Set<number>;   // LPAREN/LBRACE indices that open a function call (see computeCallParens)
   hasProse: boolean;         // statement contains at least one English-reading word
   hasQuantifier: boolean;    // statement contains forall/exists/suchthat/notin/=>/<=>
 }
@@ -139,17 +171,49 @@ interface Context {
 // `sum(`, `f(`, `F'(`. A multi-char unknown word plus `(` is NOT a call - an
 // English sentence may simply end in a parenthetical. `cases {` counts too:
 // its body is a math environment, keywords and all (`v if c; v2 otherwise`).
+// A single LETTER additionally requires SPAN adjacency all the way to the
+// paren (no whitespace anywhere in `a(`/`F'(`) - otherwise "We have a
+// (possibly empty) set" reads `a (` as a call and drags the parenthetical
+// into math. FUNCTIONS names stay lenient about spacing (`sin (x)` is still
+// a call): they are never ordinary English words, so there is no
+// parenthetical-remark reading to protect.
+const isAdjacent = (a: Token, b: Token): boolean => a.span.endLine === b.span.startLine && a.span.endCol === b.span.startCol;
+
 function callOpenerOf(tokens: Token[], wordIndex: number): number {
   const w = tokens[wordIndex];
   if (!w || w.kind !== 'WORD') return -1;
   const isFunction = FUNCTIONS[w.text] !== undefined;
   if (!isFunction && !isSingleLetter(w.text)) return -1;
   let k = wordIndex + 1;
-  while (tokens[k] && tokens[k].kind === 'OP' && tokens[k].text === "'") k++;
+  let prev = w;
+  while (tokens[k] && tokens[k].kind === 'OP' && tokens[k].text === "'") {
+    if (!isFunction && !isAdjacent(prev, tokens[k])) return -1;
+    prev = tokens[k];
+    k++;
+  }
   const opener = tokens[k];
   if (!opener) return -1;
+  if (!isFunction && !isAdjacent(prev, opener)) return -1;
   if (opener.kind === 'LPAREN' || (opener.kind === 'LBRACE' && isFunction)) return k;
   return -1;
+}
+
+// Precomputed ONCE per statement: every LPAREN/LBRACE index some word's
+// callOpenerOf resolves to. absoluteOf ("does WORD i open a call") and
+// buildContext ("does THIS paren open a call, so its contents are
+// inCallArgs") must agree on the same answer - previously buildContext
+// re-derived the fact by looking one token back from the paren, which
+// desynced from callOpenerOf whenever a prime sat between the word and the
+// paren (`F'(area)`: the token immediately before `(` is `'`, not `F`),
+// shattering the call's argument list back into prose.
+function computeCallParens(tokens: Token[]): Set<number> {
+  const parens = new Set<number>();
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].kind !== 'WORD') continue;
+    const p = callOpenerOf(tokens, i);
+    if (p >= 0) parens.add(p);
+  }
+  return parens;
 }
 
 // `Math.reals` lexes as WORD OP('.') WORD; the member must not be torn out of
@@ -165,12 +229,13 @@ const isScriptOperand = (tokens: Token[], i: number): boolean =>
   !!tokens[i - 1] && tokens[i - 1].kind === 'OP' && (tokens[i - 1].text === '_' || tokens[i - 1].text === '^');
 
 // Step A. Returns null when the word must be scored.
-function absoluteOf(tokens: Token[], i: number, inCallArgs: boolean[]): { verdict: Verdict; reason: string } | null {
+function absoluteOf(tokens: Token[], i: number, inCallArgs: boolean[], callParens: Set<number>): { verdict: Verdict; reason: string } | null {
   const w = tokens[i].text;
 
   // Context absolutes first: they outrank vocabulary (`a(x)` is a call even
-  // though `a` is normally the English article).
-  if (callOpenerOf(tokens, i) >= 0) return { verdict: 'math', reason: 'absolute: call form' };
+  // though `a` is normally the English article). Reads the SAME callParens
+  // set buildContext used to compute inCallArgs (see computeCallParens).
+  if (callParens.has(callOpenerOf(tokens, i))) return { verdict: 'math', reason: 'absolute: call form' };
   if (inCallArgs[i]) return { verdict: 'math', reason: 'absolute: function argument' };
   if (isMathPackageMember(tokens, i)) return { verdict: 'math', reason: 'absolute: Math.* member' };
   if (isScriptOperand(tokens, i)) return { verdict: 'math', reason: 'absolute: script operand' };
@@ -194,11 +259,11 @@ function absoluteOf(tokens: Token[], i: number, inCallArgs: boolean[]): { verdic
 // What the tables alone say about a token - used by neighbour features and by
 // the sentence-level prose test. Unknown multi-char words report 'prose' here
 // (that is their leaning) even though they are still scored individually.
-function staticClassOf(tokens: Token[], i: number, inCallArgs: boolean[]): StaticClass {
+function staticClassOf(tokens: Token[], i: number, inCallArgs: boolean[], callParens: Set<number>): StaticClass {
   const t = tokens[i];
   if (t.kind === 'STRING') return 'prose';
   if (t.kind !== 'WORD') return 'math';
-  const abs = absoluteOf(tokens, i, inCallArgs);
+  const abs = absoluteOf(tokens, i, inCallArgs, callParens);
   if (abs) return abs.verdict;
   const w = t.text;
   if (AMBIGUOUS.has(w) || isSingleLetter(w) || isIndexedVar(w) || FUNCTIONS[w] !== undefined) return 'ambiguous';
@@ -207,13 +272,18 @@ function staticClassOf(tokens: Token[], i: number, inCallArgs: boolean[]): Stati
 
 function buildContext(tokens: Token[]): Context {
   const n = tokens.length;
+  const callParens = computeCallParens(tokens);
   const inCallArgs = new Array<boolean>(n).fill(false);
   const matchingParen = new Array<number>(n).fill(-1);
   const stack: { index: number; kind: 'LPAREN' | 'LBRACE'; isCall: boolean }[] = [];
   for (let i = 0; i < n; i++) {
     const t = tokens[i];
     if (t.kind === 'LPAREN' || t.kind === 'LBRACE') {
-      const opensCall = i > 0 && callOpenerOf(tokens, i - 1) === i;
+      // Reads the SAME callParens set absoluteOf uses (see computeCallParens) -
+      // previously this re-derived "does this paren open a call" by checking
+      // whether the token one back was the opening WORD, which missed `F'(`
+      // (the token one back is `'`, not `F`).
+      const opensCall = callParens.has(i);
       // Nested groups inherit: `sin(2*(x+1))` is all argument.
       stack.push({ index: i, kind: t.kind, isCall: opensCall || (stack.length > 0 && stack[stack.length - 1].isCall) });
     } else if (t.kind === 'RPAREN' || t.kind === 'RBRACE') {
@@ -222,14 +292,14 @@ function buildContext(tokens: Token[]): Context {
       const open = stack[stack.length - 1];
       if (open && ((open.kind === 'LPAREN' && t.kind === 'RPAREN') || (open.kind === 'LBRACE' && t.kind === 'RBRACE'))) {
         stack.pop();
-        if (t.kind === 'RPAREN') { matchingParen[open.index] = i; matchingParen[i] = open.index; }
+        if (t.kind === 'RPAREN') matchingParen[open.index] = i;
       }
     } else if (stack.length > 0 && stack[stack.length - 1].isCall) {
       inCallArgs[i] = true;
     }
   }
 
-  const classes = tokens.map((_, i) => staticClassOf(tokens, i, inCallArgs));
+  const classes = tokens.map((_, i) => staticClassOf(tokens, i, inCallArgs, callParens));
   // A statement-INITIAL discourse marker ("Then p and q => r") does not count
   // as the sentence's own prose evidence - only the very first word-token is
   // ever exempt, so "Hence a and b are nonzero" still reads as prose (the
@@ -242,7 +312,7 @@ function buildContext(tokens: Token[]): Context {
   });
   const hasQuantifier = tokens.some((t) =>
     (t.kind === 'WORD' && QUANTIFIER_WORDS.has(t.text)) || (t.kind === 'OP' && QUANTIFIER_OPS.has(t.text)));
-  return { tokens, classes, inCallArgs, matchingParen, hasProse, hasQuantifier };
+  return { tokens, classes, inCallArgs, matchingParen, callParens, hasProse, hasQuantifier };
 }
 
 // ---- Neighbour helpers ----
@@ -268,6 +338,23 @@ function neighborWord(tokens: Token[], i: number, dir: 1 | -1): Token | null {
   return null;
 }
 
+// The index the articleA check (below) should treat as "the token right
+// after `a`/`A`": skips an immediately-following NON-CALL parenthetical
+// aside entirely, since "a (possibly empty) set" reads the same as "a set" -
+// the noun the article modifies is what follows the aside, not the aside's
+// opening paren. (If `tokens[i+1]` were a CALL paren, `a` itself would
+// already have been decided by the absolute call-form check and never reach
+// scoring at all, so the callParens.has check here documents an invariant
+// rather than guarding a live branch.)
+function afterArticle(ctx: Context, i: number): number {
+  const { tokens, callParens, matchingParen } = ctx;
+  const next = i + 1;
+  if (tokens[next] && tokens[next].kind === 'LPAREN' && !callParens.has(next) && matchingParen[next] >= 0) {
+    return matchingParen[next] + 1;
+  }
+  return next;
+}
+
 // A neighbouring single letter is evidence of math - EXCEPT `a`/`A`, which are
 // English words too, so they cannot vouch for anything ("a divides b" must not
 // make `divides` look mathematical from the left).
@@ -288,7 +375,10 @@ function scoreWord(ctx: Context, i: number): { score: number; reasons: string[] 
   const fire = (feature: Feature, side?: 'left' | 'right') => {
     const weight = WEIGHTS[feature];
     score += weight;
-    reasons.push(`${feature}${side ? `-${side}` : ''}(${weight > 0 ? '+' : ''}${weight})`);
+    // `>= 0` (not `> 0`): a weight tuned to exactly 0 must still render with a
+    // sign (`+0`) so the reason string matches the invariant checker's
+    // `[+-]\d+` regex - `(0)` alone would not.
+    reasons.push(`${feature}${side ? `-${side}` : ''}(${weight >= 0 ? '+' : ''}${weight})`);
   };
 
   const isConnective = CONNECTIVES.has(w);
@@ -296,7 +386,7 @@ function scoreWord(ctx: Context, i: number): { score: number; reasons: string[] 
   // -- shape features --
   if (isSingleLetter(w)) fire('singleLetter');
   else if (isIndexedVar(w)) fire('indexedVar');
-  else if (FUNCTIONS[w] !== undefined) fire('bareKeyword');
+  else if (FUNCTIONS[w] !== undefined && !VERB_FUNCTIONS.has(w)) fire('bareKeyword');
   else if (!isMathTableWord(w) && !AMBIGUOUS.has(w)) fire('unknownMultiChar');
 
   // -- neighbourhood features --
@@ -314,14 +404,13 @@ function scoreWord(ctx: Context, i: number): { score: number; reasons: string[] 
   // operands: `Let a and b be reals` and `p and q => r` are locally identical.
   if (isConnective) fire(ctx.hasProse ? 'proseSentence' : 'formulaSentence');
 
-  const leftWord = neighborWord(tokens, i, -1);
-  const rightWord = neighborWord(tokens, i, 1);
-
   // A quantified/implication statement between two single letters is a
   // formula. Not applied to connectives: it would override the sentence frame
   // in `Let a and b be real numbers suchthat ...`, which is English.
-  if (!isConnective && ctx.hasQuantifier && leftWord && rightWord && isSingleLetter(leftWord.text) && isSingleLetter(rightWord.text)) {
-    fire('quantifierContext');
+  if (!isConnective && ctx.hasQuantifier) {
+    const leftWord = neighborWord(tokens, i, -1);
+    const rightWord = neighborWord(tokens, i, 1);
+    if (leftWord && rightWord && isSingleLetter(leftWord.text) && isSingleLetter(rightWord.text)) fire('quantifierContext');
   }
 
   // -- word-specific features --
@@ -341,11 +430,15 @@ function scoreWord(ctx: Context, i: number): { score: number; reasons: string[] 
     //    "ends" means the mathy token is last or is not itself followed by
     //    English - which is what separates `a divides b` (variable) from
     //    "A function f is continuous" / "at a point c if" (article + variable).
-    const next = tokens[i + 1];
-    const after = tokens[i + 2];
-    const beyond = tokens[i + 3];
-    const nextIsNoun = !!next && next.kind === 'WORD' && next.text.length > 1 && classes[i + 1] === 'prose';
-    const endsInMath = !!after && isMathyToken(after, classes[i + 2]) && !(beyond && isProsyToken(beyond, classes[i + 3]));
+    // "next"/"after"/"beyond" look past a non-call parenthetical aside first
+    // (afterArticle): "a (possibly empty) set" reads the same as "a set", so
+    // the aside must not hide the noun it modifies.
+    const ni = afterArticle(ctx, i);
+    const next = tokens[ni];
+    const after = tokens[ni + 1];
+    const beyond = tokens[ni + 2];
+    const nextIsNoun = !!next && next.kind === 'WORD' && next.text.length > 1 && classes[ni] === 'prose';
+    const endsInMath = !!after && isMathyToken(after, classes[ni + 1]) && !(beyond && isProsyToken(beyond, classes[ni + 2]));
     const nextIsAuxVerb = !!next && next.kind === 'WORD' && AUX_VERBS.has(next.text.toLowerCase());
     if (nextIsNoun && !endsInMath && !nextIsAuxVerb) fire('articleA');
   }
@@ -400,7 +493,10 @@ function attachParentheticals(ctx: Context, verdicts: Verdict[], recordAt: (Deci
 // every neighbour that exists reads as prose, math otherwise (so `[0,1]` and
 // `f(1, 2)` keep their commas, and a sentence keeps its full stop).
 // A STRING moves the other way: it is prose by default, but between two math
-// tokens (`x = "by parts"`) it stays inside the math run as a Text atom.
+// tokens (`x = "by parts" + 1`) it stays inside the math run as a Text atom -
+// a TRAILING string (nothing after it, e.g. `x = "by parts"` alone) has no
+// right neighbour to satisfy that test, so it stays its own prose run instead
+// (see the 'Quotes' tests in test-disambiguate.mjs).
 function attachPunctuation(ctx: Context, verdicts: Verdict[]): void {
   const { tokens } = ctx;
   const sideVerdict = (i: number, dir: 1 | -1): Verdict | null => {
@@ -450,7 +546,7 @@ export function segment(tokens: Token[], diagnostics: Diagnostic[]): { runs: Run
       verdicts[i] = t.kind === 'STRING' ? 'prose' : 'math';
       continue;
     }
-    const abs = absoluteOf(tokens, i, ctx.inCallArgs);
+    const abs = absoluteOf(tokens, i, ctx.inCallArgs, ctx.callParens);
     let record: DecisionRecord;
     if (abs) {
       record = { word: t.text, span: t.span, verdict: abs.verdict, score: abs.verdict === 'math' ? ABSOLUTE_SCORE : -ABSOLUTE_SCORE, reasons: [abs.reason] };

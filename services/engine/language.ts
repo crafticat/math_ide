@@ -141,6 +141,14 @@ export const STOP_WORDS: Set<string> = new Set([
   ...PROSE_INDICATORS_BEFORE,
   ...PROSE_INDICATORS_AFTER,
 ]);
+// NOTE: disambiguate.ts keeps its own local AUX_VERBS set, which overlaps in
+// content with the auxiliary/copula verbs listed above (be/is/are/have/...)
+// but is deliberately a separate, narrower set serving a different job:
+// STOP_WORDS answers "does this word read as English at all" for absolute
+// prose classification; AUX_VERBS answers the much narrower "is this
+// SPECIFICALLY an auxiliary/copula verb", used only to veto the articleA
+// feature after `a`/`A`. Do not collapse them into one table - that would
+// make the articleA veto fire on any stop word, not just copulas.
 
 // ---- FUNCTIONS ----
 // New table for the v2 engine (not a 1:1 structural port — compiler.ts encodes
