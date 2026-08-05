@@ -93,13 +93,17 @@ export const Console: React.FC<ConsoleProps> = ({ logs, theme = 'dark' }) => {
                     >
                         <LogIcon type={log.type} colors={colors} />
                         <span className="select-none text-[10px] pt-px" style={{ color: colors.textDim }}>{log.timestamp}</span>
+                        {log.line !== undefined && (
+                            <span className="select-none flex-shrink-0" style={{ color: colors.textMuted }}>Ln {log.line}</span>
+                        )}
                         <span style={{
                           color: log.type === 'error' ? colors.error :
                                  log.type === 'success' ? colors.success :
                                  log.type === 'warning' ? colors.warning :
-                                 colors.text
+                                 colors.info
                         }}>
                             {log.message}
+                            {log.hint && <span style={{ color: colors.textDim }}> — {log.hint}</span>}
                         </span>
                     </div>
                 ))}

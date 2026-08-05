@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Sidebar, Explorer } from './components/Sidebar';
 import { Editor } from './components/Editor';
 import { Preview } from './components/Preview';
@@ -9,9 +9,10 @@ import { FileDialog } from './components/modals/FileDialog';
 import { FindReplaceDialog } from './components/modals/FindReplaceDialog';
 import { SyntaxHelpDialog } from './components/modals/SyntaxHelpDialog';
 import { ExportDialog, ExportOptions } from './components/modals/ExportDialog';
-import { compileMathScript } from './services/compiler';
+import { compile, EngineResult } from './services/engine/engine';
+import type { Diagnostic } from './services/engine/types';
 import { INITIAL_CONTENT, DEFAULT_FILE_CONTENT, DARK_THEME, LIGHT_THEME } from './constants';
-import { FileNode, CompilationResult, AppSettings } from './types';
+import { FileNode, CompilationResult, LogEntry, AppSettings } from './types';
 import {
   loadFiles, saveFiles, loadRecentFiles, saveRecentFiles, addToRecentFiles,
   loadSettings, saveSettings, generateFileId, findFileById, updateFileContent,
@@ -19,6 +20,27 @@ import {
 } from './services/storage';
 import { Play, FileDown, Code, Eye, X, Circle, HelpCircle } from 'lucide-react';
 import { useDelayedUnmount } from './hooks/useDelayedUnmount';
+
+const EMPTY_RESULT: CompilationResult = { latexLines: [], logs: [], macros: {}, diagnostics: [] };
+
+/**
+ * Engine diagnostics in the Console's own shape. The engine has exactly two
+ * severities - it recovers from everything and never reports an 'error', so
+ * LogEntry's 'error'/'success' types stay unused by this path - and every
+ * diagnostic carries a span, whose first line is what the Console shows and
+ * what the editor gutter marks. One timestamp for the whole batch: they all
+ * come from the same compile.
+ */
+const toLogEntries = (diagnostics: Diagnostic[]): LogEntry[] => {
+  const timestamp = new Date().toLocaleTimeString();
+  return diagnostics.map(d => ({
+    type: d.severity === 'warn' ? 'warning' : 'info',
+    message: d.message,
+    hint: d.hint,
+    line: d.span.startLine,
+    timestamp,
+  }));
+};
 
 export default function App() {
   // File state
@@ -29,8 +51,24 @@ export default function App() {
 
   // Editor content
   const [content, setContent] = useState<string>('');
-  const [compilationResult, setCompilationResult] = useState<CompilationResult>({ latexLines: [], logs: [], macros: {} });
+  // The whole engine result, not just what the view needs today: `index` and
+  // `sourceLines` are what nodeAt() reads, so caret-driven highlighting can
+  // hang off this state without recompiling.
+  const [engineResult, setEngineResult] = useState<EngineResult | null>(null);
   const [cursorLine, setCursorLine] = useState<number>(1);
+
+  // Everything downstream (Preview, Console, status bar) still consumes the
+  // CompilationResult shape; only the producer changed.
+  const compilationResult = useMemo<CompilationResult>(() => (
+    engineResult
+      ? {
+          latexLines: engineResult.latexLines,
+          logs: toLogEntries(engineResult.diagnostics),
+          macros: engineResult.macros,
+          diagnostics: engineResult.diagnostics,
+        }
+      : EMPTY_RESULT
+  ), [engineResult]);
 
   // UI State
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
@@ -109,8 +147,7 @@ export default function App() {
 
   // Compilation
   const runCompilation = useCallback(() => {
-    const result = compileMathScript(content);
-    setCompilationResult(result);
+    setEngineResult(compile(content));
   }, [content]);
 
   // Initial Run
@@ -716,6 +753,7 @@ export default function App() {
                 theme={theme}
                 editorRef={editorRef}
                 onCursorLineChange={setCursorLine}
+                diagnostics={compilationResult.diagnostics}
               />
             </div>
 
@@ -800,6 +838,11 @@ export default function App() {
                   <span className="flex items-center gap-1.5" style={{ color: themeColors.error }}>
                     <Circle size={8} fill="currentColor" />
                     <span>{compilationResult.logs.filter(l => l.type === 'error').length} error(s)</span>
+                  </span>
+                ) : hasWarnings ? (
+                  <span className="flex items-center gap-1.5" style={{ color: themeColors.warning }}>
+                    <Circle size={8} fill="currentColor" />
+                    <span>{compilationResult.logs.filter(l => l.type === 'warning').length} warning(s)</span>
                   </span>
                 ) : (
                   <span className="flex items-center gap-1.5" style={{ color: themeColors.success }}>

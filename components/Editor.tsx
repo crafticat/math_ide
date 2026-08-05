@@ -1,8 +1,70 @@
 
 
-import React, { useRef, useState, useEffect, RefObject } from 'react';
+import React, { useRef, useState, useEffect, useMemo, RefObject } from 'react';
 import { THEME, AUTOCOMPLETE_DATA, DARK_THEME, LIGHT_THEME } from '../constants';
+import { FUNCTIONS, GREEK, SCOPES, SYMBOL_MAP } from '../services/engine/language';
+import type { Diagnostic } from '../services/engine/types';
 import { useDelayedUnmount } from '../hooks/useDelayedUnmount';
+
+// ---- Highlighting vocabulary ----
+//
+// The engine's language tables are the base, so what the editor colours and
+// what the compiler understands cannot drift apart. On top of them the editor
+// adds DISPLAY-ONLY extras: spellings a user plausibly types that the engine
+// does not define as vocabulary (LaTeX-style aliases, differentials, decoration
+// names). Those are listed explicitly below rather than hidden inside the
+// pipeline, so the gap between "the editor paints it" and "the engine knows
+// it" stays visible.
+//
+// The lists are DISJOINT by construction. highlightCode runs them as ordered
+// passes over one string, and each pass wraps its matches in a <span>; a word
+// in two lists would be wrapped twice and end up wearing the LATER pass's
+// colour. Subtracting earlier passes gives "first pass wins", which is what
+// keeps `partial`/`inf`/`angle`/`triangle` - function-coloured in this editor
+// since long before language.ts also listed them as symbols/greek - looking
+// the way they always have.
+
+/** Proof-prose openers. Editor-only: the parser reads these as ordinary
+ *  prose, they are not engine vocabulary. */
+const PROOF_KEYWORDS = [
+  'Let', 'Assume', 'Then', 'Therefore', 'Since', 'Consider', 'Given', 'Suppose',
+  'Hence', 'Thus', 'And', 'If', 'Show', 'Clearly', 'Note', 'Recall', 'Define',
+];
+
+/** Function-ish spellings FUNCTIONS does not define. */
+const EXTRA_FUNCTION_WORDS = [
+  // Calculus / differentials
+  'prod', 'diff', 'partial', 'dx', 'dy', 'dz', 'dt', 'du', 'dv', 'dr', 'dtheta',
+  // Alternative names
+  'cbrt', 'round', 'binom', 'perm', 'mod', 'frac', 'tfrac', 'dfrac', 'pmatrix',
+  // Trig variants without an engine spelling
+  'arccot', 'arcsec', 'arccsc', 'coth', 'sech', 'csch',
+  // Statistics & bounds
+  'sup', 'inf', 'avg', 'mean', 'median',
+  // Linear algebra
+  'rank', 'dim', 'ker',
+  // Accents / decorations
+  'dot', 'ddot', 'underline', 'widehat', 'widetilde',
+  // Geometry
+  'angle', 'triangle',
+];
+
+/** Symbol spellings SYMBOL_MAP does not carry. `if` is the `cases` branch
+ *  separator, worth marking even though it is a stop word to the parser. */
+const EXTRA_SYMBOL_WORDS = ['if'];
+
+/** SYMBOL_MAP is keyed by operator spellings (`->`, `+-`, `|`) as well as
+ *  words; only the word keys can go into a \b...\b regex. */
+const isWordKey = (key: string) => /^[A-Za-z][A-Za-z0-9]*$/.test(key);
+
+const SCOPE_WORDS = [...Object.keys(SCOPES), ...PROOF_KEYWORDS];
+const FUNCTION_WORDS = [...Object.keys(FUNCTIONS), ...EXTRA_FUNCTION_WORDS];
+const CLAIMED_EARLIER = new Set([...SCOPE_WORDS, ...FUNCTION_WORDS]);
+// Greek is claimed by its own (later) pass, so it is subtracted here rather
+// than left to be painted blue by the symbol pass.
+const SYMBOL_WORDS = [...Object.keys(SYMBOL_MAP).filter(isWordKey), ...EXTRA_SYMBOL_WORDS]
+  .filter(word => !CLAIMED_EARLIER.has(word) && !(word in GREEK));
+const GREEK_WORDS = Object.keys(GREEK).filter(word => !CLAIMED_EARLIER.has(word));
 
 interface EditorProps {
   content: string;
@@ -11,9 +73,12 @@ interface EditorProps {
   theme?: 'dark' | 'light';
   editorRef?: RefObject<HTMLTextAreaElement>;
   onCursorLineChange?: (line: number) => void;
+  /** Compile diagnostics for the content currently shown. Marked in the
+   *  line-number gutter, one dot per line that has any. */
+  diagnostics?: Diagnostic[];
 }
 
-export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, theme = 'dark', editorRef, onCursorLineChange }) => {
+export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, theme = 'dark', editorRef, onCursorLineChange, diagnostics }) => {
   const internalRef = useRef<HTMLTextAreaElement>(null);
   const textareaRef = editorRef || internalRef;
   const preRef = useRef<HTMLPreElement>(null);
@@ -593,6 +658,7 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
         string: '#c9a227',
         operator: '#d4a373',
         bracket: '#c9a227',
+        variable: '#c4b8d4',
     };
 
     // Color categories using theme
@@ -607,7 +673,7 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
         function: syntaxColors.function,     // Sage green - functions
         string: syntaxColors.string,         // Gold - strings
         bracket: syntaxColors.bracket,       // Gold - brackets
-        variable: syntaxColors.variable || '#c4b8d4', // Light lavender - single-letter vars
+        variable: syntaxColors.variable, // Light lavender - single-letter vars
     };
 
     return code.split('\n').map((line) => {
@@ -658,71 +724,29 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
         );
 
         // 4. Scope Keywords (Purple) - Problem, Theorem, Proof, Case, etc.
-        const scopeKeywords = [
-            // Scope openers
-            'Problem', 'Subproblem', 'Part', 'Section', 'Theorem', 'Proof', 'Case', 'Lemma',
-            'Definition', 'Corollary', 'Proposition', 'Remark', 'Claim', 'Example',
-            // Proof keywords
-            'Let', 'Assume', 'Then', 'Therefore', 'Since', 'Consider', 'Given', 'Suppose',
-            'Hence', 'Thus', 'And', 'If', 'Show', 'Clearly', 'Note', 'Recall', 'Define'
-        ];
-        scopeKeywords.forEach(kw => {
+        //    (language.ts SCOPES + the editor's own proof-prose openers)
+        SCOPE_WORDS.forEach(kw => {
              const regex = new RegExp(`\\b${kw}\\b`, 'g');
              processed = processed.replace(regex, `<span style="color: ${colors.keyword};">${kw}</span>`);
         });
 
-        // 5. Math Functions (Yellow) - comprehensive list for math coding
+        // 5. Math Functions (Yellow) - language.ts FUNCTIONS + display-only extras
         // NOTE: Avoid words that appear in HTML like 'span', 'style', 'color'
-        const mathFunctions = [
-            // Calculus
-            'integral', 'sum', 'prod', 'lim', 'diff',
-            // Basic functions
-            'sqrt', 'cbrt', 'floor', 'ceil', 'round',
-            // Trig functions
-            'sin', 'cos', 'tan', 'cot', 'sec', 'csc',
-            'arcsin', 'arccos', 'arctan', 'arccot', 'arcsec', 'arccsc',
-            'sinh', 'cosh', 'tanh', 'coth', 'sech', 'csch',
-            // Logarithms & exponentials
-            'log', 'ln', 'exp',
-            // Combinatorics
-            'factorial', 'choose', 'binom', 'perm',
-            // Statistics & bounds
-            'max', 'min', 'sup', 'inf', 'avg', 'mean', 'median',
-            // Linear algebra
-            'det', 'rank', 'dim', 'ker',
-            'matrix', 'bmatrix', 'vmatrix', 'pmatrix',
-            // Accents/decorations
-            'hat', 'tilde', 'vec', 'dot', 'ddot', 'overline', 'underline', 'widehat', 'widetilde',
-            // Geometry
-            'ray', 'angle', 'triangle',
-            // Number theory
-            'gcd', 'lcm', 'mod',
-            // Differentials
-            'dx', 'dy', 'dz', 'dt', 'du', 'dv', 'dr', 'dtheta',
-            // Other
-            'cases', 'frac', 'tfrac', 'dfrac', 'partial'
-        ];
-        mathFunctions.forEach(fn => {
+        FUNCTION_WORDS.forEach(fn => {
              const regex = new RegExp(`\\b${fn}\\b`, 'g');
              processed = processed.replace(regex, `<span style="color: ${colors.function};">${fn}</span>`);
         });
 
-        // 6. Math Symbols (Cyan) - symbols that get replaced: exists, forall, suchthat, etc.
+        // 6. Math Symbols (Cyan) - the word-spelled keys of language.ts SYMBOL_MAP
         // Note: lowercase 'in', 'and', 'or', 'not' are highlighted here for visibility,
         // but the compiler uses context detection for actual LaTeX output
-        const mathSymbols = ['exists', 'forall', 'in', 'notin', 'subset', 'union', 'intersect', 'implies', 'iff', 'suchthat', 'QED', 'AND', 'OR', 'NOT', 'and', 'or', 'not', 'if'];
-        mathSymbols.forEach(sym => {
+        SYMBOL_WORDS.forEach(sym => {
              const regex = new RegExp(`\\b${sym}\\b`, 'g');
              processed = processed.replace(regex, `<span style="color: ${colors.mathSymbol};">${sym}</span>`);
         });
 
-        // 7. Greek Letters (Orange)
-        const greekLetters = [
-            'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'theta', 'lambda', 'sigma', 'omega', 'pi',
-            'mu', 'phi', 'rho', 'tau', 'zeta', 'eta', 'chi', 'psi', 'nu', 'kappa', 'xi',
-            'Delta', 'Gamma', 'Theta', 'Lambda', 'Sigma', 'Omega', 'Pi', 'Phi', 'Psi', 'Xi'
-        ];
-        greekLetters.forEach(letter => {
+        // 7. Greek Letters (Orange) - language.ts GREEK
+        GREEK_WORDS.forEach(letter => {
              const regex = new RegExp(`\\b${letter}\\b`, 'g');
              processed = processed.replace(regex, `<span style="color: ${colors.greek};">${letter}</span>`);
         });
@@ -764,6 +788,23 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
 
   // Theme colors
   const colors = theme === 'dark' ? DARK_THEME : LIGHT_THEME;
+
+  // Diagnostics grouped by the line their span starts on - one gutter dot per
+  // line however many diagnostics it collected, warn winning over info.
+  const gutterMarks = useMemo(() => {
+    const marks = new Map<number, { severity: 'info' | 'warn'; messages: string[] }>();
+    for (const d of diagnostics ?? []) {
+      const existing = marks.get(d.span.startLine);
+      const text = d.hint ? `${d.message} - ${d.hint}` : d.message;
+      if (existing) {
+        existing.messages.push(text);
+        if (d.severity === 'warn') existing.severity = 'warn';
+      } else {
+        marks.set(d.span.startLine, { severity: d.severity, messages: [text] });
+      }
+    }
+    return marks;
+  }, [diagnostics]);
 
   // Calculate font size based on zoom
   const baseFontSize = 14;
@@ -811,9 +852,28 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
                 color: colors.lineNumbers
             }}
         >
-            {lineNumbers.map(num => (
-                <div key={num} className="transition-colors" style={{ lineHeight: `${lineHeight}px` }}>{num}</div>
-            ))}
+            {lineNumbers.map(num => {
+                const mark = gutterMarks.get(num);
+                return (
+                    <div key={num} className="transition-colors relative" style={{ lineHeight: `${lineHeight}px` }}>
+                        {mark && (
+                            <span
+                                title={mark.messages.join('\n')}
+                                className="absolute rounded-full"
+                                style={{
+                                    left: '4px',
+                                    top: '50%',
+                                    transform: 'translateY(-50%)',
+                                    width: '6px',
+                                    height: '6px',
+                                    backgroundColor: mark.severity === 'warn' ? colors.warning : colors.info,
+                                }}
+                            />
+                        )}
+                        {num}
+                    </div>
+                );
+            })}
         </div>
       </div>
 
