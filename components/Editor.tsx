@@ -66,6 +66,17 @@ const SYMBOL_WORDS = [...Object.keys(SYMBOL_MAP).filter(isWordKey), ...EXTRA_SYM
   .filter(word => !CLAIMED_EARLIER.has(word) && !(word in GREEK));
 const GREEK_WORDS = Object.keys(GREEK).filter(word => !CLAIMED_EARLIER.has(word));
 
+// How long the caret must hold still before the app is told where it is.
+//
+// The debounce lives HERE, not in App, because this is where the firehose is:
+// 'selectionchange' fires on every keystroke, every arrow key and every pixel
+// of a mouse drag. Damping it at the source means App sees at most one caret
+// update per interval and re-renders (and re-runs the structure lookup) at
+// most that often, instead of once per event. 50ms is below the ~100ms that
+// reads as "instant" while still collapsing a held-down arrow key (~30ms
+// repeat) into a single update.
+const CARET_DEBOUNCE_MS = 50;
+
 interface EditorProps {
   content: string;
   onChange: (newContent: string) => void;
@@ -73,12 +84,18 @@ interface EditorProps {
   theme?: 'dark' | 'light';
   editorRef?: RefObject<HTMLTextAreaElement>;
   onCursorLineChange?: (line: number) => void;
+  /** Where the caret is, as 1-based line / 0-based column into the RAW text
+   *  the user typed - the coordinates the engine's nodeAt() expects. Fires
+   *  debounced (CARET_DEBOUNCE_MS) on every cursor move, unlike
+   *  onCursorLineChange which only fires when the LINE changes: the structure
+   *  highlight depends on the column too. */
+  onCaretChange?: (line: number, col: number) => void;
   /** Compile diagnostics for the content currently shown. Marked in the
    *  line-number gutter, one dot per line that has any. */
   diagnostics?: Diagnostic[];
 }
 
-export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, theme = 'dark', editorRef, onCursorLineChange, diagnostics }) => {
+export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, theme = 'dark', editorRef, onCursorLineChange, onCaretChange, diagnostics }) => {
   const internalRef = useRef<HTMLTextAreaElement>(null);
   const textareaRef = editorRef || internalRef;
   const preRef = useRef<HTMLPreElement>(null);
@@ -96,6 +113,12 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
   // Bracket matching state
   const [matchingBracket, setMatchingBracket] = useState<{ open: number; close: number } | null>(null);
   const [cursorLine, setCursorLine] = useState(1);
+  // Pending onCaretChange timer (see CARET_DEBOUNCE_MS). A ref, not state:
+  // restarting it must not re-render.
+  const caretTimerRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (caretTimerRef.current !== null) clearTimeout(caretTimerRef.current);
+  }, []);
 
   // Autocomplete animation
   const { shouldRender: showAutoComplete, isAnimatingOut: autoCompleteClosing } =
@@ -165,6 +188,19 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
     if (line !== cursorLine) {
       setCursorLine(line);
       onCursorLineChange?.(line);
+    }
+
+    // The caret, in the engine's coordinates: 1-based line, 0-based column
+    // measured from the character after the previous newline. Debounced (see
+    // CARET_DEBOUNCE_MS) - one timer, restarted on every move, so a burst of
+    // events reports only where the caret came to rest.
+    if (onCaretChange) {
+      const col = pos - (content.lastIndexOf('\n', pos - 1) + 1);
+      if (caretTimerRef.current !== null) clearTimeout(caretTimerRef.current);
+      caretTimerRef.current = window.setTimeout(() => {
+        caretTimerRef.current = null;
+        onCaretChange(line, col);
+      }, CARET_DEBOUNCE_MS);
     }
 
     // Check for bracket matching

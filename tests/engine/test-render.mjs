@@ -333,6 +333,26 @@ const DOC_GOLDEN = [
   const hl = renderStatement(tokens, 0, [], { span: { startLine: 1, startCol: 2, endLine: 1, endCol: 3 } });
   checkExact('Highlight', 'leaf node hook wraps just that leaf', hl, String.raw`a+\htmlClass{hl-node}{b}`);
 }
+{
+  // The `sides` half of the hook: OPT-IN, and only for a segment root that is
+  // an equation chain. (engine.ts's renderLineWithHighlight is the one caller
+  // that asks for it; the document render never does.) The full behaviour -
+  // alternation, the op gate, depth - is pinned in test-engine-api.mjs.
+  const render = (src, spec) => {
+    const { tokens: all } = lex(src);
+    return renderStatement(all.filter((t) => t.kind !== 'NEWLINE' && t.kind !== 'COMMENT'), 0, [], spec);
+  };
+  const nowhere = { startLine: 9, startCol: 0, endLine: 9, endCol: 3 };
+  checkExact('Highlight', 'sides off (default): an equation renders plain',
+    render('a = b', { span: nowhere }), String.raw`a=b`);
+  checkExact('Highlight', 'sides on: each operand region is wrapped, alternating',
+    render('a = b', { span: nowhere, sides: true }),
+    String.raw`\htmlClass{hl-lhs}{a}=\htmlClass{hl-rhs}{b}`);
+  checkExact('Highlight', 'sides on: a non-equation relation is left alone',
+    render('a in B', { span: nowhere, sides: true }), String.raw`a\in B`);
+  checkExact('Highlight', 'sides on: a non-relation root is left alone',
+    render('a+b', { span: nowhere, sides: true }), String.raw`a+b`);
+}
 
 // ============================================
 // Expression-level policies not pinned by a golden

@@ -114,8 +114,20 @@ const EquationBlock: React.FC<EquationBlockProps> = ({ latex, lineNumber, theme,
     );
 };
 
+/** `#rrggbb` -> `rgba(r, g, b, a)`. The structure tints are the theme's own
+ *  colours at low alpha, so they follow a theme change instead of being three
+ *  more hard-coded hex values to keep in sync. */
+const rgba = (hex: string, alpha: number): string => {
+  const n = parseInt(hex.replace('#', ''), 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+};
+
 export const Preview: React.FC<PreviewProps> = ({ latexLines, theme = 'dark', highlightLine }) => {
   const colors = theme === 'dark' ? DARK_THEME : LIGHT_THEME;
+  // Light theme carries slightly more alpha: the same tint over a white page
+  // reads fainter than over a dark one.
+  const nodeAlpha = theme === 'dark' ? 0.28 : 0.32;
+  const sideAlpha = theme === 'dark' ? 0.13 : 0.16;
 
   return (
     <div className="h-full w-full flex flex-col" style={{ backgroundColor: colors.bg }}>
@@ -140,6 +152,26 @@ export const Preview: React.FC<PreviewProps> = ({ latexLines, theme = 'dark', hi
         /* Style Problem/Theorem/Proof headers */
         .katex .textbf {
             color: ${colors.accent};
+        }
+
+        /* ---- Caret structure tints ----
+           The spans KaTeX emits for the engine's \\htmlClass{hl-...} wrappers:
+           hl-node is the structural node the caret is inside, hl-lhs/hl-rhs
+           the two sides of the equation the line states (alternating along a
+           chain). BACKGROUND ONLY - no padding, border or font change - so
+           the tint appearing and disappearing under a moving caret can never
+           reflow the equation it is pointing at. */
+        .katex .hl-node {
+            background: ${rgba(colors.accent, nodeAlpha)};
+            border-radius: 3px;
+        }
+        .katex .hl-lhs {
+            background: ${rgba(colors.info, sideAlpha)};
+            border-radius: 4px;
+        }
+        .katex .hl-rhs {
+            background: ${rgba(colors.accentSecondary, sideAlpha)};
+            border-radius: 4px;
         }
       `}</style>
 

@@ -8,7 +8,10 @@
 //   compile(source)                        -> LaTeX lines + macros + diagnostics
 //                                             + AST + statement index
 //   nodeAt(result, line, col)              -> the structural node under a caret
-//   renderLineWithHighlight(result, l, c)  -> that node's line, re-rendered tinted
+//   renderLineWithHighlight(result, l, c)  -> that node's line, re-rendered
+//                                             tinted: the caret's node, plus
+//                                             the sides of the equation the
+//                                             line states (see that function)
 //
 // ---- One parse, one diagnostics array ----
 //
@@ -251,6 +254,14 @@ export function nodeAt(result: EngineResult, line: number, col: number): NodeHit
  * and no stage of the pipeline re-runs (the entry's segments are already
  * parsed).
  *
+ * The re-render also asks for `sides` (render.ts's HighlightSpec): if the
+ * statement STATES AN EQUATION - a math segment whose root is a Relation of
+ * `= != < > <= >=` - its operand regions come back wrapped in
+ * \htmlClass{hl-lhs}/{hl-rhs}, alternating. That tint is a property of the
+ * LINE the caret is on, not of the node it landed on: it is what makes the
+ * app visibly know left from right. A line that states something else
+ * (`x in A`, `p => q`, a quantifier clause) gets the hl-node wrap only.
+ *
  * Returns null exactly when nodeAt does.
  */
 export function renderLineWithHighlight(
@@ -263,6 +274,6 @@ export function renderLineWithHighlight(
   const entry = hit.statement;
   return {
     line: entry.line,
-    latex: renderStatementLine(entry.blockKind, entry.segments, entry.indent, { span: hit.expr.span }),
+    latex: renderStatementLine(entry.blockKind, entry.segments, entry.indent, { span: hit.expr.span, sides: true }),
   };
 }

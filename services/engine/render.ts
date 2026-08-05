@@ -59,9 +59,22 @@ import { FUNCTIONS, MATH_KEYWORDS, SYMBOL_MAP, operatorLatex } from './language'
 
 // ---- Public API ----
 
-/** The node the caret sits on (Task 11). A node whose span EQUALS this one is
- *  wrapped in \htmlClass{hl-node}{...} so the view can tint it. */
-export interface HighlightSpec { span: Span }
+/** What a caret asks the renderer to make visible (Task 11). */
+export interface HighlightSpec {
+  /** The node the caret sits on: the node whose span EQUALS this one is
+   *  wrapped in \htmlClass{hl-node}{...} so the view can tint it. */
+  span: Span;
+  /** Also paint the operand REGIONS of the equation this line states: when a
+   *  math segment's ROOT is an equation chain (isEquationChain below), each
+   *  of its operands is wrapped in \htmlClass{hl-lhs}/{hl-rhs}, alternating.
+   *  This is the "left side / right side" tint, independent of where inside
+   *  the line the caret actually landed - so a caret in the denominator of
+   *  `(x+1)/(x-1) = y^2 + 1` gets hl-node on the fraction AND hl-lhs around
+   *  the whole side that fraction is. Off by default: only the caret-driven
+   *  re-render (engine.ts's renderLineWithHighlight) asks for it, never the
+   *  document render. */
+  sides?: boolean;
+}
 
 /** One prose or math run of a statement, already segmented and (for math)
  *  parsed - the unit parseStatement produces and renderSegments consumes
@@ -76,6 +89,11 @@ export interface ParsedSegment { kind: 'prose' | 'math'; tokens: Token[]; expr?:
 // not "what have I seen": they change how a node renders itself.
 interface Ctx {
   highlight?: HighlightSpec;
+  // At the ROOT of a math segment, where an equation chain still counts as
+  // "the equation this line states" and gets its sides painted. Cleared on
+  // the way down (render), so a Relation buried in a matrix cell or a
+  // set-builder condition is just a relation, not this line's equation.
+  sides: boolean;
   // Inside a set-builder's condition, an Abs renders with PLAIN bars: the
   // enclosing \left\{ ... \middle| ... \right\} already owns the delimiter
   // sizing, and a nested \left|...\right| fights with the \middle|.
@@ -126,6 +144,21 @@ const RELATION_LATEX: Record<string, string> = {
   'similar': '\\sim', 'parallel': '\\parallel', 'perp': '\\perp', 'corresponds': '\\triangleq',
   'implies': '\\implies', '=>': '\\implies', 'iff': '\\iff', '<=>': '\\iff',
 };
+
+// The relation ops that make a line an EQUATION (or an inequality): the ones
+// whose operands are two comparable QUANTITIES, so "the left side" and "the
+// right side" are things the reader manipulates. Everything else in
+// RELATION_LATEX is excluded on purpose - `x in A` has a member and a set,
+// `p => q` two propositions, `AB parallel CD` two figures; none of those is a
+// side you would move a term across, and tinting them as if they were would
+// teach the wrong shape.
+const EQUATION_OPS = new Set(['=', '!=', '<', '>', '<=', '>=']);
+
+/** A Relation whose ops are ALL equation ops - the chain `a = b < c` counts,
+ *  the mixed `a = b in C` does not (one link that is not a quantity
+ *  comparison makes the whole chain's "sides" meaningless). */
+const isEquationChain = (e: Expr): e is Expr & { kind: 'Relation' } =>
+  e.kind === 'Relation' && e.ops.length > 0 && e.ops.every((op) => EQUATION_OPS.has(op));
 
 // Mirrors parser.ts's DIFFERENTIALS (module-local there). A juxtaposition
 // whose right side is one of these gets a thin space: `\,dx`.
@@ -186,7 +219,16 @@ const ENDS_CONTROL_WORD = /\\[a-zA-Z]+$/;
 // Characters that would be swallowed by (or read badly against) a preceding
 // control word. Digits and '-' are not swallowed by LaTeX's lexer, but the
 // approved goldens space them anyway (`\ge 0`, `\ge -1`).
-const STARTS_AFTER_CONTROL_WORD = /^[A-Za-z0-9-]/;
+//
+// A leading \htmlClass{...}{ wrapper (or a nest of them - a caret's hl-node
+// inside its side's hl-lhs) is SKIPPED rather than matched: the wrapper is a
+// tint, not content, and `\ge` followed by `\htmlClass{hl-rhs}{1+...}` must
+// keep the space it would have had before the plain `1`. Without the skip a
+// line would silently change spelling (`\ge 1` -> `\ge1`) the moment a caret
+// landed on it, and the highlighted re-render would no longer be the compiled
+// line plus wrappers. The extra space is invisible either way: LaTeX eats a
+// space that terminates a control word.
+const STARTS_AFTER_CONTROL_WORD = /^(?:\\htmlClass\{[^{}]*\}\{)*[A-Za-z0-9-]/;
 
 /** Concatenates two LaTeX fragments, inserting one space only where the
  *  concatenation would otherwise mis-lex or read badly. */
@@ -313,10 +355,12 @@ const ROW_SEP = '\\\\ ';
 
 /**
  * Renders one expression to LaTeX. `highlight` (optional) wraps the node whose
- * span matches it exactly in \htmlClass{hl-node}{...}.
+ * span matches it exactly in \htmlClass{hl-node}{...}, and - with
+ * `highlight.sides` - paints this expression's operand regions when it is an
+ * equation chain.
  */
 export function renderExpr(expr: Expr, highlight?: HighlightSpec): string {
-  return render(expr, { highlight, inSetBuilderCond: false, cfrac: false, inScript: false });
+  return render(expr, { highlight, inSetBuilderCond: false, cfrac: false, inScript: false, sides: !!highlight?.sides });
 }
 
 function render(e: Expr, ctx: Ctx): string {
@@ -325,6 +369,12 @@ function render(e: Expr, ctx: Ctx): string {
   if (ctx.cfrac && e.kind !== 'Frac' && e.kind !== 'Group' && e.kind !== 'BinOp') {
     ctx = { ...ctx, cfrac: false };
   }
+  // Consumed HERE - only the FIRST node render() sees can be a segment root -
+  // and cleared for everything below: the sides belong to the equation the
+  // LINE states, so a Relation further down (a matrix cell, a set-builder
+  // condition, a call argument) renders plain.
+  const paintSides = ctx.sides && isEquationChain(e);
+  if (ctx.sides) ctx = { ...ctx, sides: false };
   // Decided BEFORE rendering `e`'s children, and cleared from the ctx they
   // render with: a macro-expanded subtree can have a child whose span is
   // IDENTICAL to its parent's (expandMacros re-spans every replacement token
@@ -334,7 +384,10 @@ function render(e: Expr, ctx: Ctx): string {
   // nesting duplicate wrappers instead of the one the caret actually
   // resolved to.
   const hit = !!ctx.highlight && sameSpan(e.span, ctx.highlight.span);
-  const latex = renderNode(e, hit ? { ...ctx, highlight: undefined } : ctx);
+  const inner = hit ? { ...ctx, highlight: undefined } : ctx;
+  // Both wrappers can apply at once - a caret ON the top-level relation tints
+  // the whole line hl-node and still splits it into its sides.
+  const latex = paintSides ? renderRelation(e as Expr & { kind: 'Relation' }, inner, true) : renderNode(e, inner);
   return latex && hit ? `\\htmlClass{hl-node}{${latex}}` : latex;
 }
 
@@ -455,11 +508,22 @@ function seqSep(right: Expr): string {
   return '\\ ';
 }
 
-function renderRelation(e: Expr & { kind: 'Relation' }, ctx: Ctx): string {
-  let out = render(e.operands[0], ctx);
+// `sides`: paint each operand REGION (see HighlightSpec.sides). The two
+// classes ALTERNATE across the whole chain rather than being "first vs rest",
+// so `a = b < c` reads lhs / rhs / lhs and every region is a different colour
+// from its neighbours - which is the only thing the tint has to say.
+//
+// An operand that renders to nothing (the implicit left side of a
+// continuation line `= f(x)`) is left unwrapped: an empty \htmlClass would
+// tint a zero-width box, and cat() would then be unable to see that there is
+// no left side at all.
+function renderRelation(e: Expr & { kind: 'Relation' }, ctx: Ctx, sides = false): string {
+  const paint = (latex: string, i: number): string =>
+    sides && latex ? `\\htmlClass{${i % 2 === 0 ? 'hl-lhs' : 'hl-rhs'}}{${latex}}` : latex;
+  let out = paint(render(e.operands[0], ctx), 0);
   for (let i = 0; i < e.ops.length; i++) {
     out = cat(out, RELATION_LATEX[e.ops[i]] ?? e.ops[i]);
-    out = cat(out, render(e.operands[i + 1], ctx));
+    out = cat(out, paint(render(e.operands[i + 1], ctx), i + 1));
   }
   return out;
 }

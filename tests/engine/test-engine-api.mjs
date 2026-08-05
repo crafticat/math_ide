@@ -113,23 +113,31 @@ const indentMismatch = (result) => result.index.map((e) => {
   return null;
 }).filter(Boolean);
 
-// Removes the first \htmlClass{hl-node}{...} wrapper (brace-matched, so a
-// wrapped \frac{..}{..} survives intact), leaving its contents - a
-// highlighted line stripped this way must equal the compiled line exactly.
-const HL_OPEN = '\\htmlClass{hl-node}{';
+// Removes EVERY \htmlClass{hl-*}{...} wrapper - the caret's hl-node and the
+// hl-lhs/hl-rhs side tints alike (brace-matched, so a wrapped \frac{..}{..}
+// survives intact), leaving their contents. A highlighted line stripped this
+// way must equal the compiled line exactly: the tints are the ONLY difference
+// a caret makes, down to the byte (which is also what pins the spacing rule
+// that lets `\ge \htmlClass{hl-rhs}{1+...}` keep the space it would have had
+// before a bare `1`).
+const HL_OPEN = /\\htmlClass\{hl-[a-z]+\}\{/;
 function stripHighlight(latex) {
-  const open = latex.indexOf(HL_OPEN);
-  if (open < 0) return latex;
-  const start = open + HL_OPEN.length;
-  let depth = 1;
-  let i = start;
-  while (i < latex.length && depth > 0) {
-    if (latex[i] === '{') depth++;
-    else if (latex[i] === '}') depth--;
-    i++;
+  for (;;) {
+    const m = HL_OPEN.exec(latex);
+    if (!m) return latex;
+    const start = m.index + m[0].length;
+    let depth = 1;
+    let i = start;
+    while (i < latex.length && depth > 0) {
+      if (latex[i] === '{') depth++;
+      else if (latex[i] === '}') depth--;
+      i++;
+    }
+    latex = latex.slice(0, m.index) + latex.slice(start, i - 1) + latex.slice(i);
   }
-  return latex.slice(0, open) + latex.slice(start, i - 1) + latex.slice(i);
 }
+// Class names of the wrappers in `latex`, outermost-first per occurrence.
+const hlClasses = (latex) => [...latex.matchAll(/\\htmlClass\{(hl-[a-z]+)\}\{/g)].map((m) => m[1]);
 
 const spanWithin = (inner, outer) => {
   if (inner.startLine < outer.startLine || inner.endLine > outer.endLine) return false;
@@ -356,16 +364,19 @@ const frac = compile(FRAC_SRC);
   check('Highlight', 'returns { line, latex } for a caret inside the denominator', !!out && out.line === 1 && typeof out.latex === 'string',
     JSON.stringify(out));
   // nodeAt resolves the denominator caret to the Frac (see (b)), so the tint
-  // wraps the whole fraction - which is exactly the node containing `x-1`.
-  checkExact('Highlight', 'the hl-node wrapper encloses the fraction containing x-1',
-    out ? out.latex : '<null>', String.raw`\htmlClass{hl-node}{\frac{x+1}{x-1}}=y^{2}+1`);
+  // wraps the whole fraction - which is exactly the node containing `x-1` -
+  // and the line states an equation, so both SIDES are painted around it.
+  checkExact('Highlight', 'the hl-node wrapper encloses the fraction containing x-1, inside its hl-lhs side',
+    out ? out.latex : '<null>',
+    String.raw`\htmlClass{hl-lhs}{\htmlClass{hl-node}{\frac{x+1}{x-1}}}=\htmlClass{hl-rhs}{y^{2}+1}`);
   check('Highlight', 'the wrapped region contains the denominator text x-1',
     !!out && /\\htmlClass\{hl-node\}\{[^]*x-1/.test(out.latex), out && out.latex);
 
   const expCol = FRAC_SRC.indexOf('y^2') + 2;
   const powOut = renderLineWithHighlight(frac, 1, expCol);
-  checkExact('Highlight', 'a caret in y^2 tints only the Pow',
-    powOut ? powOut.latex : '<null>', String.raw`\frac{x+1}{x-1}=\htmlClass{hl-node}{y^{2}}+1`);
+  checkExact('Highlight', 'a caret in y^2 tints only the Pow - inside the hl-rhs side this time',
+    powOut ? powOut.latex : '<null>',
+    String.raw`\htmlClass{hl-lhs}{\frac{x+1}{x-1}}=\htmlClass{hl-rhs}{\htmlClass{hl-node}{y^{2}}+1}`);
 
   // Un-highlighted, the same call path reproduces the compiled line exactly -
   // for the fraction wrapper too, whose contents contain braces of their own.
@@ -394,6 +405,11 @@ const frac = compile(FRAC_SRC);
     JSON.stringify(out));
   check('Highlight', 'the Claim re-render carries an hl-node wrapper',
     !!out && out.latex.includes('\\htmlClass{hl-node}{'), out && out.latex);
+  // The claim STATES an inequality, so its sides are painted too - the caret
+  // node (the Pow) sits inside the left one.
+  checkExact('Highlight', 'the Claim re-render paints the two sides of its >=',
+    out ? out.latex : '<null>',
+    String.raw`\quad \quad \quad \textit{\text{Claim: }}\htmlClass{hl-lhs}{\htmlClass{hl-node}{(1+x)^{0}}}\ge \htmlClass{hl-rhs}{1+0\cdot x}`);
   check('Highlight', 'the Claim re-render matches the golden line once the wrapper is stripped',
     !!out && stripHighlight(out.latex) === DOC_GOLDEN[5], out && out.latex);
 
@@ -403,6 +419,102 @@ const frac = compile(FRAC_SRC);
   check('Highlight', `statement line ${thenLine} re-renders with its 3-deep indent`,
     !!thenOut && thenOut.line === thenLine && thenOut.latex.startsWith('\\quad \\quad \\quad '),
     JSON.stringify(thenOut && thenOut.latex.slice(0, 40)));
+}
+
+// ============================================
+// (d2) Side tints - the app knows left from right
+// ============================================
+// hl-lhs/hl-rhs are driven by the STATEMENT, not by the caret: the caret only
+// decides which line is re-rendered (and gets its own hl-node inside). They
+// appear only where the line states an EQUATION - a math segment whose ROOT
+// is a Relation of `= != < > <= >=` - so that the tint means "these are the
+// two quantities being compared" and never anything vaguer.
+//
+// Every caret column is computed with indexOf, so no assertion below can
+// drift out of the fixture it names.
+{
+  // A chain alternates lhs/rhs/lhs... : the point of the tint is that
+  // neighbouring regions differ, not that there are exactly two of them.
+  const SRC = 'a = b < c';
+  const r = compile(SRC);
+  const out = renderLineWithHighlight(r, 1, SRC.indexOf('b'));
+  checkExact('SideTints', 'a = b < c paints three alternating regions',
+    out ? out.latex : '<null>',
+    String.raw`\htmlClass{hl-node}{\htmlClass{hl-lhs}{a}=\htmlClass{hl-rhs}{b}<\htmlClass{hl-lhs}{c}}`);
+  checkExact('SideTints', 'the region classes are lhs / rhs / lhs (the caret node wraps the whole chain)',
+    JSON.stringify(hlClasses(out ? out.latex : '')), JSON.stringify(['hl-node', 'hl-lhs', 'hl-rhs', 'hl-lhs']));
+  check('SideTints', 'stripping every wrapper reproduces the compiled chain',
+    !!out && stripHighlight(out.latex) === r.latexLines[0].latex, out && out.latex);
+}
+{
+  // The op gate. `in` is a membership, not a comparison of quantities, so it
+  // gets the caret's hl-node and no sides - and ONE non-equation link is
+  // enough to disqualify a whole chain.
+  const cases = [
+    ['x in A', 'x', String.raw`\htmlClass{hl-node}{x\in A}`],
+    ['a = b in C', 'b', String.raw`\htmlClass{hl-node}{a=b\in C}`],
+    ['p => q', 'p', String.raw`\htmlClass{hl-node}{p\implies q}`],
+  ];
+  for (const [SRC, needle, want] of cases) {
+    const r = compile(SRC);
+    const out = renderLineWithHighlight(r, 1, SRC.indexOf(needle));
+    checkExact('SideTints', `${SRC} -> hl-node only, no side tints`, out ? out.latex : '<null>', want);
+  }
+}
+{
+  // A quantifier clause is not an equation even though it CONTAINS one: the
+  // root of `forall x >= -1 forall n in N: ...` is the loose-adjacency chain,
+  // and the `>=` relations hang below it.
+  const line = lineOf(BERNOULLI, 'forall x >= -1');
+  const out = renderLineWithHighlight(bern, line, colOf(BERNOULLI, 'forall x >= -1', '(1+x)^n') + 1);
+  checkExact('SideTints', 'the forall line tints only the caret node',
+    out ? out.latex : '<null>',
+    String.raw`\quad \quad \forall x\ge -1\ \forall n\in\mathbb{N}:\ \htmlClass{hl-node}{(1+x)^{n}}\ge 1+n\cdot x`);
+  check('SideTints', 'the forall line has no hl-lhs/hl-rhs anywhere',
+    !!out && !/hl-(lhs|rhs)/.test(out.latex), out && out.latex);
+  check('SideTints', 'stripping reproduces the golden theorem line',
+    !!out && stripHighlight(out.latex) === DOC_GOLDEN[2], out && out.latex);
+}
+{
+  // Depth: an equation inside a `cases` branch is a relation like any other,
+  // NOT this line's equation - the sides flag is consumed at the segment root
+  // and never reaches a child.
+  const SRC = 'cases { x = 0; y = 1 }';
+  const r = compile(SRC);
+  const out = renderLineWithHighlight(r, 1, SRC.indexOf('x = 0'));
+  checkExact('SideTints', 'a Relation inside cases gets hl-node but no sides',
+    out ? out.latex : '<null>',
+    String.raw`\begin{cases}\htmlClass{hl-node}{x=0}\\ y=1\end{cases}`);
+
+  // ...while the SAME cases node as the right side of a real equation is
+  // painted, with the inner relation's hl-node nested inside it.
+  const OUTER = 'f(x) = cases { x = 0; y = 1 }';
+  const ro = compile(OUTER);
+  const outer = renderLineWithHighlight(ro, 1, OUTER.indexOf('x = 0'));
+  checkExact('SideTints', 'the same cases node AS a right side is painted hl-rhs',
+    outer ? outer.latex : '<null>',
+    String.raw`\htmlClass{hl-lhs}{f(x)}=\htmlClass{hl-rhs}{\begin{cases}\htmlClass{hl-node}{x=0}\\ y=1\end{cases}}`);
+}
+{
+  // Spacing: the tint must not change the line's spelling. `\le` needs a
+  // space before a bare `a_{1}`, and it still needs it when the operand
+  // arrives wrapped in TWO \htmlClass layers.
+  const SRC = 'x <= a_1';
+  const r = compile(SRC);
+  const out = renderLineWithHighlight(r, 1, SRC.indexOf('a_1') + 1);
+  checkExact('SideTints', 'a control-word op keeps its space in front of a wrapped operand',
+    out ? out.latex : '<null>',
+    String.raw`\htmlClass{hl-lhs}{x}\le \htmlClass{hl-rhs}{\htmlClass{hl-node}{a_{1}}}`);
+  check('SideTints', 'and stripping the wrappers gives back `x\\le a_{1}` exactly',
+    !!out && stripHighlight(out.latex) === r.latexLines[0].latex, out && out.latex);
+}
+{
+  // Nothing about the sides leaks into the DOCUMENT render: compiling emits
+  // no hl-* class at all, whatever the line says.
+  const r = compile('(x+1)/(x-1) = y^2 + 1\na = b < c\nx in A');
+  check('SideTints', 'compile() itself never emits an hl-* wrapper',
+    r.latexLines.every((l) => !/hl-(node|lhs|rhs)/.test(l.latex)),
+    r.latexLines.map((l) => l.latex).join(' | '));
 }
 
 // ============================================
@@ -655,9 +767,15 @@ const frac = compile(FRAC_SRC);
   check('MacroHighlight', `caret on the macro-expanded P [${pLine}:${pCol}] resolves and re-renders`,
     !!out && typeof out.latex === 'string', JSON.stringify(out));
 
-  const wrapperCount = out ? out.latex.split(HL_OPEN).length - 1 : -1;
+  // Counted by CLASS: the line also carries the two side tints (it states an
+  // equation), and those are one per operand by construction - the invariant
+  // this test exists for is that the CARET's wrapper appears exactly once.
+  const wrapperCount = out ? hlClasses(out.latex).filter((c) => c === 'hl-node').length : -1;
   check('MacroHighlight', `rendered line contains EXACTLY ONE hl-node wrapper (got ${wrapperCount})`,
     wrapperCount === 1, out && out.latex);
+  checkExact('MacroHighlight', 'the macro-expanded operand is tinted once, inside its side',
+    out ? out.latex : '<null>',
+    String.raw`\htmlClass{hl-lhs}{z}=\htmlClass{hl-rhs}{\htmlClass{hl-node}{y^{2}}+1}`);
 }
 
 // ============================================

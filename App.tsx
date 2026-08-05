@@ -9,7 +9,7 @@ import { FileDialog } from './components/modals/FileDialog';
 import { FindReplaceDialog } from './components/modals/FindReplaceDialog';
 import { SyntaxHelpDialog } from './components/modals/SyntaxHelpDialog';
 import { ExportDialog, ExportOptions } from './components/modals/ExportDialog';
-import { compile, EngineResult } from './services/engine/engine';
+import { compile, renderLineWithHighlight, EngineResult } from './services/engine/engine';
 import type { Diagnostic } from './services/engine/types';
 import { INITIAL_CONTENT, DEFAULT_FILE_CONTENT, DARK_THEME, LIGHT_THEME } from './constants';
 import { FileNode, CompilationResult, LogEntry, AppSettings } from './types';
@@ -75,6 +75,49 @@ export default function App() {
         }
       : { ...EMPTY_RESULT, logs }
   ), [engineResult, logs]);
+
+  // ---- Caret-driven structure highlight ----
+  //
+  // The structural node under the caret - and, when the line states an
+  // equation, that equation's two sides - are tinted in the PREVIEW, so the
+  // rendered maths visibly knows its own shape. Nothing here recompiles: the
+  // engine re-renders exactly ONE line out of the result already on screen
+  // (renderLineWithHighlight reuses that statement's parsed segments), and
+  // the caret itself arrives pre-debounced from the Editor.
+  const [caret, setCaret] = useState<{ line: number; col: number } | null>(null);
+  // Stable identity on purpose: the Editor keeps this callback in a closure it
+  // only refreshes when the content or the cursor line changes, so a new
+  // function every render would go stale between those refreshes.
+  const handleCaretChange = useCallback((line: number, col: number) => setCaret({ line, col }), []);
+
+  const contentLines = useMemo(() => content.split('\n'), [content]);
+
+  // Staleness guard. `engineResult` trails the editor by up to one compile
+  // debounce, and spans measured against the OLD text would tint the wrong
+  // characters - so if the caret's line no longer reads the way it read when
+  // it was compiled, nothing is highlighted until the next compile catches
+  // up. A tint that is briefly absent is honest; one that is briefly wrong
+  // teaches the user that the app does not really know the structure.
+  const highlight = useMemo(() => {
+    if (!engineResult || !caret) return null;
+    if (engineResult.sourceLines[caret.line - 1] !== contentLines[caret.line - 1]) return null;
+    return renderLineWithHighlight(engineResult, caret.line, caret.col);
+  }, [engineResult, caret, contentLines]);
+
+  // What the Preview renders: the compiled lines with the highlighted one's
+  // LaTeX swapped in. Only the Preview sees this - the Console, the status bar
+  // and every export keep reading `compilationResult`, because the \htmlClass
+  // wrappers are a screen affordance, not part of the document.
+  const previewLines = useMemo(() => {
+    const lines = compilationResult.latexLines;
+    if (!highlight) return lines;
+    // Spacer lines (\rule) share their originalLine with the header they
+    // introduce; past them, the first line for that source line is the
+    // statement that was just re-rendered.
+    const target = lines.findIndex(l => l.originalLine === highlight.line && !l.latex.startsWith('\\rule'));
+    if (target < 0) return lines;
+    return lines.map((l, i) => (i === target ? { ...l, latex: highlight.latex } : l));
+  }, [compilationResult.latexLines, highlight]);
 
   // UI State
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
@@ -769,6 +812,7 @@ export default function App() {
                 theme={theme}
                 editorRef={editorRef}
                 onCursorLineChange={setCursorLine}
+                onCaretChange={handleCaretChange}
                 diagnostics={compilationResult.diagnostics}
               />
             </div>
@@ -813,7 +857,7 @@ export default function App() {
                       )}
                     </div>
                   </div>
-                  <Preview latexLines={compilationResult.latexLines} theme={theme} highlightLine={cursorLine} />
+                  <Preview latexLines={previewLines} theme={theme} highlightLine={cursorLine} />
                 </div>
               </div>
             )}
