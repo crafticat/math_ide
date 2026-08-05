@@ -417,7 +417,8 @@ const EXPR_CASES = [
   ['That is amazing!', String.raw`\text{That is amazing!}`],
   // differentials
   ['integral(a -> b) f(x) dx', String.raw`\int_{a}^{b} f(x)\,dx`],
-  // QED loses SYMBOL_MAP's legacy \quad prefix at the renderer level
+  // QED - SYMBOL_MAP's entry is the bare glyph directly; no renderer-side
+  // stripping involved anymore (see language.ts's QED entry for the history)
   ['QED', String.raw`\blacksquare`],
 ];
 for (const [source, want] of EXPR_CASES) {

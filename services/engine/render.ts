@@ -402,10 +402,7 @@ function renderNode(e: Expr, ctx: Ctx): string {
         ? escapeLatex(e.name)
         : `\\mathrm{${escapeLatex(e.name)}}`;
     case 'Sym':
-      // NOTE: SYMBOL_MAP still carries the legacy compiler's layout prefix on
-      // QED (`\quad \blacksquare`). Layout is the renderer's business, not the
-      // symbol table's, so the prefix is dropped here.
-      return e.latex.startsWith('\\quad ') ? e.latex.slice('\\quad '.length) : e.latex;
+      return e.latex;
     case 'Text':
       return `\\text{${escapeLatex(e.text)}}`;
     case 'Raw':

@@ -135,7 +135,7 @@ const {
 // ============================================
 check('Values', "SYMBOL_MAP['=>'] === '\\implies'", SYMBOL_MAP && SYMBOL_MAP['=>'] === '\\implies');
 check('Values', "SYMBOL_MAP['suchthat'] === '\\text{ s.t. }'", SYMBOL_MAP && SYMBOL_MAP['suchthat'] === '\\text{ s.t. }');
-check('Values', "SYMBOL_MAP['QED'] === '\\quad \\blacksquare'", SYMBOL_MAP && SYMBOL_MAP['QED'] === '\\quad \\blacksquare');
+check('Values', "SYMBOL_MAP['QED'] === '\\blacksquare'", SYMBOL_MAP && SYMBOL_MAP['QED'] === '\\blacksquare');
 check('Values', "SYMBOL_MAP['|'] === '\\mid'", SYMBOL_MAP && SYMBOL_MAP['|'] === '\\mid');
 check('Values', "SYMBOL_MAP['+-'] === '\\pm'", SYMBOL_MAP && SYMBOL_MAP['+-'] === '\\pm');
 check('Values', "SYMBOL_MAP['in'] === '\\in'", SYMBOL_MAP && SYMBOL_MAP['in'] === '\\in');

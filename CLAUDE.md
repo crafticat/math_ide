@@ -9,7 +9,7 @@ npm install          # Install dependencies
 npm run dev          # Start development server (http://localhost:3000)
 npm run build        # Build for production
 npm run preview      # Preview production build locally
-npm run test:engine  # Run the engine v2 test suite (10 suites) - the primary test command
+npm run test:engine  # Run the engine v2 test suite (11 suites) - the primary test command
 node test-advanced.mjs  # 175 legacy compiler test cases (inline copy, predates services/engine/)
 node test-editor.mjs    # 40 editor checks (autocomplete, highlighting)
 ```
@@ -54,4 +54,4 @@ The preview tints the smallest structural node under the editor caret (fractions
 
 ### Testing
 
-`npm run test:engine` (`tests/engine/`) is the primary suite: 10 test files covering the lexer, document parser, disambiguator, expression parser, renderer, `engine.ts`'s public API, a 175-case golden corpus, realistic multi-line documents, and a fuzz/KaTeX-validity pass - see `docs/superpowers/specs/2026-08-04-golden-migration-notes.md` for how the corpus was migrated off the legacy engine. `test-advanced.mjs` and `test-editor.mjs` (repo root) predate the engine and run against inline/legacy copies rather than `services/engine/`; keep them green, but add new compiler test cases to `tests/engine/` instead.
+`npm run test:engine` (`tests/engine/`) is the primary suite: 11 test files covering the lexer, document parser, disambiguator, expression parser, renderer, `engine.ts`'s public API, a 175-case golden corpus, realistic multi-line documents, a fuzz/KaTeX-validity pass, and a compat gate that compiles every `constants.ts` `AUTOCOMPLETE_DATA` template through the real engine (`test-autocomplete-compat.mjs`) - see `docs/superpowers/specs/2026-08-04-golden-migration-notes.md` for how the corpus was migrated off the legacy engine. `test-advanced.mjs` and `test-editor.mjs` (repo root) predate the engine and run against inline/legacy copies rather than `services/engine/`; keep them green, but add new compiler test cases to `tests/engine/` instead.

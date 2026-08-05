@@ -32,7 +32,12 @@ export const SYMBOL_MAP: Record<string, string> = {
   'dot': '\\cdot',
   'inf': '\\infty',
   'suchthat': '\\text{ s.t. }',
-  'QED': '\\quad \\blacksquare',
+  // Legacy note: compiler.ts's table (this file's provenance source, see the
+  // header) spells this '\quad \blacksquare' - a layout prefix that belongs
+  // to the RENDERER, not a symbol table. render.ts no longer strips anything
+  // off the Sym it builds from this entry (it emits the latex verbatim), so
+  // the clean glyph lives here instead.
+  'QED': '\\blacksquare',
   '|': '\\mid',
   'AND': '\\land',
   'OR': '\\lor',

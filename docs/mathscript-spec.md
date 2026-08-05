@@ -43,6 +43,8 @@ Two characters are reserved as explicit escape hatches, for the moments the auto
 - `"..."` forces its contents to be literal text, whatever's inside — no MathScript syntax is interpreted, not even symbols like `|`.
 - `$...$` forces its contents to be parsed as a self-contained math expression, even in the middle of an English sentence.
 
+(A third, smaller notation addition beyond these two escape hatches: exactly three dots, `...`, lex as one token too — not an escape hatch, just a symbol, `\ldots` — see [Ellipsis](#ellipsis-) below.)
+
 ```
 Let $speed$ = 5 dot t and note the speed is constant
 ```

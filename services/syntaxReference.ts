@@ -1,6 +1,14 @@
 /**
- * Auto-generated syntax reference data
- * This file exports data structures used by the compiler so the syntax help dialog stays in sync
+ * Hand-curated display content for the Help dialog (SyntaxHelpDialog.tsx via
+ * generateSyntaxReference() below). This is NOT read by the compiler -
+ * services/engine/ never imports this file - so nothing here is kept in sync
+ * automatically, and an entry can silently drift from what compile() actually
+ * produces if it is edited (or left un-edited) carelessly.
+ *
+ * For the verified language reference - every example checked example-by-
+ * example against the real compile() output - see docs/mathscript-spec.md.
+ * When in doubt about what MathScript really does, that file is the source
+ * of truth, not this one.
  */
 
 // Symbol mappings (keyword -> LaTeX)
@@ -33,15 +41,17 @@ export const symbolMap: Record<string, string> = {
   '+-': '\\pm',
   '-+': '\\mp',
   'dot': '\\cdot',
+  // A '|' with no partner bar reads as "divides", not absolute value - see
+  // the 'a | b' entry in basicMathPatterns below.
+  '|': '\\mid',
 
   // Special
   'inf': '\\infty',
-  'QED': '\\quad \\blacksquare',
+  'QED': '\\blacksquare',
 
   // PDE/Calculus
   'partial': '\\partial',
   'eps': '\\varepsilon',
-  'divides': '\\text{divides}',
 
   // Geometry
   'perp': '\\perp',
@@ -160,6 +170,14 @@ export const basicMathPatterns: { syntax: string; output: string; description: s
   { syntax: 'x_i', output: 'x_{i}', description: 'Subscript' },
   { syntax: 'x_ij', output: 'x_{ij}', description: 'Multi-char subscript' },
   { syntax: '|x|', output: '\\left|x\\right|', description: 'Absolute value' },
+  // A '|' with no partner bar ahead in the same clause reads as "divides"
+  // instead of absolute value (docs/mathscript-spec.md, "Absolute value and
+  // divides"). This replaces an earlier entry that claimed the word
+  // "divides" itself compiles to '\text{divides}' - it doesn't; an ordinary
+  // word next to variables renders glued with no spacing (a known
+  // limitation, see docs/mathscript-spec.md). The '|' spelling below is what
+  // actually produces clean "divides" notation.
+  { syntax: 'a | b', output: 'a \\mid b', description: 'Divides (no partner bar)' },
   { syntax: '<1, 2, 3>', output: '\\langle 1, 2, 3 \\rangle', description: 'Vector notation' },
 ];
 
