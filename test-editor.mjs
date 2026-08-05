@@ -83,6 +83,22 @@ function testHighlight(line) {
     return placeholder;
   });
 
+  // Operators - before entities are hidden, since `-&gt;` IS an entity
+  processed = processed.replace(/(-&gt;|=&gt;|&lt;=&gt;|!=|&lt;=|&gt;=|\+-|-\+)/g,
+    `<span style="color: ${mockColors.operator};">$1</span>`
+  );
+
+  // Hide HTML entities from the passes below (the number pass would otherwise
+  // match the `039` inside `&#039;` and split the entity in half)
+  const entPlaceholders = [];
+  let entCounter = 0;
+  processed = processed.replace(/&[#a-zA-Z0-9]+;/g, (entity) => {
+    const placeholder = `@ENT${entCounter}@`;
+    entPlaceholders.push({ placeholder, entity });
+    entCounter++;
+    return placeholder;
+  });
+
   // Scope Keywords
   const scopeKeywords = ['Problem', 'Theorem', 'Proof', 'Case', 'Lemma', 'Let', 'Then'];
   scopeKeywords.forEach(kw => {
@@ -113,6 +129,11 @@ function testHighlight(line) {
 
   // Numbers
   processed = processed.replace(/(\b\d+\.?\d*\b)/g, `<span style="color: ${mockColors.number};">$1</span>`);
+
+  // Restore HTML entities
+  entPlaceholders.forEach(({ placeholder, entity }) => {
+    processed = processed.replace(placeholder, entity);
+  });
 
   // Restore single-letter variable placeholders
   varPlaceholders.forEach(({ placeholder, letter }) => {
@@ -245,6 +266,31 @@ const highlightTests = [
     shouldNotContain: 'span style="color: <',
     description: 'Should not have broken nested tags',
     category: 'HTMLSafety'
+  },
+
+  // HTML entities must survive every highlighting pass intact. The apostrophe
+  // escapes to `&#039;`, whose digits the number pass used to match and wrap,
+  // splitting the entity so the editor printed a literal `&#039;`.
+  {
+    input: "F'(x)",
+    shouldNotContain: '&#<span',
+    description: 'Apostrophe entity must not be split open by the number pass',
+    category: 'HTMLSafety'
+  },
+  {
+    input: "F'(x)",
+    shouldContain: '&#039;',
+    description: 'Apostrophe survives as one intact entity',
+    category: 'HTMLSafety'
+  },
+
+  // Operators are spelled with entities too (`-&gt;`), so entity protection
+  // must not run before they are matched.
+  {
+    input: 'x -> y',
+    shouldContain: `color: ${mockColors.operator}`,
+    description: 'Arrow operator is still highlighted alongside entity protection',
+    category: 'Highlighting'
   },
 ];
 

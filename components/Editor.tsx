@@ -718,6 +718,31 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
             return placeholder;
         });
 
+        // 2c. Operators (Gold/Yellow) - ->, =>, <=>, !=, <=, >=, +-, -+
+        // Runs HERE, not further down, because escapeHtml spells half of these
+        // with entities (`-&gt;`, `&lt;=`) and the next step hides every entity
+        // behind a placeholder - after that there is no `&gt;` left to match.
+        // Still after the variable pass, which has to see plain text.
+        processed = processed.replace(/(-&gt;|=&gt;|&lt;=&gt;|!=|&lt;=|&gt;=|\+-|-\+)/g,
+            `<span style="color: ${colors.operator};">$1</span>`
+        );
+
+        // 2d. Hide HTML entities from every pass below, same trick as the
+        // variables above. escapeHtml turns `'` into `&#039;`, and the number
+        // pass's \b\d+\b matches the `039` INSIDE it - splitting the entity so
+        // the browser prints a literal `&#039;` instead of an apostrophe. The
+        // word passes can do the same to `&amp;`/`&lt;`/`&quot;` the day a
+        // language table gains a word like `amp`. `@ENTn@` is immune: its
+        // digits sit against letters, so no \b falls inside it.
+        const entPlaceholders: { placeholder: string; entity: string }[] = [];
+        let entCounter = 0;
+        processed = processed.replace(/&[#a-zA-Z0-9]+;/g, (entity) => {
+            const placeholder = `@ENT${entCounter}@`;
+            entPlaceholders.push({ placeholder, entity });
+            entCounter++;
+            return placeholder;
+        });
+
         // 3. Math.Package
         processed = processed.replace(/(Math)(\.)([a-zA-Z0-9_]+)/g,
             `<span style="color: ${colors.mathPackage};">$1</span><span style="color: ${themeColors.textDim};">$2</span><span style="color: ${colors.function};">$3</span>`
@@ -751,15 +776,10 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
              processed = processed.replace(regex, `<span style="color: ${colors.greek};">${letter}</span>`);
         });
 
-        // 8. Operators (Gold/Yellow) - ->, =>, <=>, !=, <=, >=, +-, -+
-        processed = processed.replace(/(-&gt;|=&gt;|&lt;=&gt;|!=|&lt;=|&gt;=|\+-|-\+)/g,
-            `<span style="color: ${colors.operator};">$1</span>`
-        );
-
-        // 9. Numbers (Light Green)
+        // 8. Numbers (Light Green)
         processed = processed.replace(/(\b\d+\.?\d*\b)/g, `<span style="color: ${colors.number};">$1</span>`);
 
-        // 10. Subscripts and superscripts (highlight _ and ^ specially)
+        // 9. Subscripts and superscripts (highlight _ and ^ specially)
         // a_i highlights the _ and subscript, x^2 highlights the ^ and superscript
         // Note: Do NOT change font-size here as it breaks cursor alignment
         processed = processed.replace(/(_)([a-zA-Z0-9]+)/g,
@@ -769,8 +789,14 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
             `<span style="color: ${colors.operator};">$1</span><span style="color: ${colors.mathSymbol};">$2</span>`
         );
 
-        // 11. Parentheses and square brackets only (skip {} to avoid conflicts with HTML spans)
+        // 10. Parentheses and square brackets only (skip {} to avoid conflicts with HTML spans)
         processed = processed.replace(/([()\[\]])/g, `<span style="color: ${colors.bracket};">$1</span>`);
+
+        // 11. Restore the HTML entities hidden in 2d, now that every regex
+        // pass that could have reached inside one has run.
+        entPlaceholders.forEach(({ placeholder, entity }) => {
+            processed = processed.replace(placeholder, entity);
+        });
 
         // 12. Restore single-letter variable placeholders with the variable color (lavender)
         // This provides contrast with blue math symbols
