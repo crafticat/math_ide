@@ -548,9 +548,15 @@ function renderFrac(e: Expr & { kind: 'Frac' }, ctx: Ctx): string {
   return `${cmd}{${render(dissolveParens(e.num), sub)}}{${render(dissolveParens(e.den), sub)}}`;
 }
 
-// The fraction bar already groups its operands, so the author's parens around
-// one are visual noise: `1/(1 + 1/n)` -> `\frac{1}{1+\frac{1}{n}}`.
-const dissolveParens = (e: Expr): Expr => (e.kind === 'Group' && e.bracket === '(' ? e.operand : e);
+/** The fraction bar already groups its operands, so the author's parens around
+ *  one are visual noise: `1/(1 + 1/n)` -> `\frac{1}{1+\frac{1}{n}}`. One level
+ *  only - `1/((a))` keeps the inner pair.
+ *
+ *  Exported because this is the node the RENDERER actually renders for a
+ *  fraction part, and engine.ts's nodeAt() has to agree with it: a caret
+ *  resolved to the Group instead would ask for a highlight on a node that
+ *  never reaches render(), and the tint would silently not appear. */
+export const dissolveParens = (e: Expr): Expr => (e.kind === 'Group' && e.bracket === '(' ? e.operand : e);
 
 function renderGroup(e: Expr & { kind: 'Group' }, ctx: Ctx): string {
   const inner = render(e.operand, ctx);

@@ -53,13 +53,17 @@
 // point: the smallest node under the caret is almost always a bare leaf (the
 // `1` in `(x-1)`), and tinting - or, later, transforming - a lone digit is
 // not a useful unit of work. The nearest enclosing Frac/Pow/Call/... is.
+//
+// The single exception is a fraction, whose numerator and denominator are
+// selectable halves rather than internals (see fracPart): a caret inside one
+// of them stops there instead of climbing to the whole bar.
 
 import type { Block, CompileResult, Diagnostic, Expr, Span, Token } from './types';
 import type { StatementTokens } from './document';
 import type { ParsedSegment } from './render';
 import { lex, normalizedCol } from './lexer';
 import { parseDocument } from './document';
-import { childrenOf, parseStatement, renderDocument, renderStatementLine } from './render';
+import { childrenOf, dissolveParens, parseStatement, renderDocument, renderStatementLine } from './render';
 
 // ---- Public types ----
 
@@ -97,6 +101,30 @@ export type EngineResult = CompileResult & {
 const STRUCTURAL_KINDS = new Set<Expr['kind']>([
   'Frac', 'Pow', 'Sub', 'Call', 'BigOp', 'SetBuilder', 'Abs', 'Matrix', 'Cases', 'Relation',
 ]);
+
+/**
+ * The one exception to "hand the caret to the parent": a fraction's NUMERATOR
+ * and DENOMINATOR are selectable in their own right (the design spec's list of
+ * structural kinds reads "Frac (and its num/den parts)"). A caret that reached
+ * a Frac from inside one of its halves selects THAT half - `x-1` in
+ * `(x+1)/(x-1)` - because the halves are what a fraction is made of, and
+ * tinting the whole bar tells the reader nothing they did not already see.
+ *
+ * `child` is the path node one step below the Frac, i.e. the half the caret
+ * came up through: childrenOf(Frac) is exactly [num, den], so there is no
+ * other way down. Returns null when there is no such step - a caret on the
+ * fraction BAR, or on the parens the parser folded into the fraction, belongs
+ * to neither half and selects the whole Frac, which is right: there the
+ * fraction itself is the thing under the cursor.
+ *
+ * The half is dissolved the way renderFrac dissolves it: the parens in
+ * `1/(1 + 1/n)` are not rendered, so the Group node holding them is not a
+ * thing on screen to tint, and asking for it would produce no tint at all.
+ */
+function fracPart(node: Expr, child: Expr | undefined): Expr | null {
+  if (node.kind !== 'Frac' || !child) return null;
+  return dissolveParens(child);
+}
 
 // ---- Span geometry ----
 
@@ -196,7 +224,9 @@ function pathToCaret(root: Expr, line: number, col: number): Expr[] | null {
 /**
  * Strict caret lookup in NORMALIZED (line, col) coordinates: the smallest
  * expression containing the caret, lifted to the nearest enclosing
- * STRUCTURAL node (itself, if it already is one). Returns null for a caret
+ * STRUCTURAL node (itself, if it already is one) - or, when that node is a
+ * Frac the caret reached from inside one of its halves, to that half
+ * (fracPart). Returns null for a caret
  * that is on prose, inside an unparseable Raw run, between statements, past
  * the end of its statement (spans are end-exclusive), or in a subtree with
  * no structural node above it (a lone `x` is not worth selecting).
@@ -218,7 +248,13 @@ function nodeAtNormalized(result: EngineResult, line: number, col: number): Node
     // claim a precision the parse does not have.
     if (path[path.length - 1].kind === 'Raw') return null;
     for (let i = path.length - 1; i >= 0; i--) {
-      if (STRUCTURAL_KINDS.has(path[i].kind)) return { expr: path[i], statement: entry };
+      if (!STRUCTURAL_KINDS.has(path[i].kind)) continue;
+      // ...with the Frac num/den exception (fracPart), which is the only place
+      // the answer can be a NON-structural node: the denominator `x-1` is a
+      // bare BinOp, the denominator of `x/n` a bare Var. That is fine for
+      // every consumer - renderLineWithHighlight tints by SPAN, and a span is
+      // a span whatever kind carries it.
+      return { expr: fracPart(path[i], path[i + 1]) ?? path[i], statement: entry };
     }
     return null;
   }

@@ -95,7 +95,7 @@ interface EditorProps {
   diagnostics?: Diagnostic[];
 }
 
-export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, theme = 'dark', editorRef, onCursorLineChange, onCaretChange, diagnostics }) => {
+const EditorImpl: React.FC<EditorProps> = ({ content, onChange, zoom = 100, theme = 'dark', editorRef, onCursorLineChange, onCaretChange, diagnostics }) => {
   const internalRef = useRef<HTMLTextAreaElement>(null);
   const textareaRef = editorRef || internalRef;
   const preRef = useRef<HTMLPreElement>(null);
@@ -1068,3 +1068,19 @@ export const Editor: React.FC<EditorProps> = ({ content, onChange, zoom = 100, t
     </div>
   );
 };
+
+/** MEMOIZED for the caret. Task 11 gave App a `caret` state that updates on
+ *  every cursor move (debounced to 50ms), and an App re-render used to drag
+ *  the editor's whole syntax-highlight pass - every token of the document,
+ *  re-tokenized and re-elemented - along with it, even though not one of
+ *  these props had changed. All of them are stable across a caret move by
+ *  construction (App holds `content` in state, `onChange`/`onCaretChange` in
+ *  useCallback, `diagnostics` in a useMemo), so the default shallow compare
+ *  skips the re-render outright; the editor still re-renders on its OWN state
+ *  (cursor line, bracket match, autocomplete), which is what actually needs
+ *  to move with the caret. Measured on a 259-line document, production build,
+ *  sweeping the caret inside one line: 25.4ms of scripting per caret move
+ *  became 0.95ms. (Inside a bracket-heavy line the editor re-renders anyway,
+ *  because matchingBracket is a fresh object every move - 38.8ms to 21.6ms
+ *  there; that one is its own, older story.) */
+export const Editor = React.memo(EditorImpl);

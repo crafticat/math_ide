@@ -252,15 +252,37 @@ const frac = compile(FRAC_SRC);
     frac.latexLines[0] ? frac.latexLines[0].latex : '<missing>', String.raw`\frac{x+1}{x-1}=y^{2}+1`);
 
   // `1` inside the DENOMINATOR `(x-1)`: the smallest containing node is the
-  // Num leaf, whose nearest structural ancestor is the Frac (BinOp `x-1` and
-  // the parens are not structural).
+  // Num leaf, whose nearest structural ancestor is the Frac - but a fraction's
+  // NUM and DEN are selectable in their own right (the design spec lists
+  // "Frac (and its num/den parts)"), so the walk up stops at the part the
+  // caret came from: the denominator subtree, here the BinOp `x-1`.
   const denomCol = FRAC_SRC.indexOf('x-1') + 2;
   const denom = nodeAt(frac, 1, denomCol);
-  check('nodeAt', `caret on the 1 in (x-1) [col ${denomCol}] -> Frac`,
-    !!denom && denom.expr.kind === 'Frac', denom ? `${denom.expr.kind} ${spanStr(denom.expr.span)}` : 'null');
+  check('nodeAt', `caret on the 1 in (x-1) [col ${denomCol}] -> the DEN subtree (BinOp x-1), not the whole Frac`,
+    !!denom && denom.expr.kind === 'BinOp' && spanStr(denom.expr.span) === '1:7-1:10',
+    denom ? `${denom.expr.kind} ${spanStr(denom.expr.span)}` : 'null');
   check('nodeAt', 'the hit carries its statement index entry (line 1)',
     !!denom && denom.statement && denom.statement.line === 1 && denom.statement.blockKind === 'Statement',
     denom && denom.statement ? `${denom.statement.blockKind}@${denom.statement.line}` : 'null');
+
+  // The numerator half of the same rule.
+  const numCol = FRAC_SRC.indexOf('x+1');
+  const num = nodeAt(frac, 1, numCol);
+  check('nodeAt', `caret on the x in (x+1) [col ${numCol}] -> the NUM subtree (BinOp x+1)`,
+    !!num && num.expr.kind === 'BinOp' && spanStr(num.expr.span) === '1:1-1:4',
+    num ? `${num.expr.kind} ${spanStr(num.expr.span)}` : 'null');
+
+  // The exception is exactly "came from inside a part". A caret on the
+  // fraction BAR - or on the parens the parser folded into the fraction, which
+  // belong to no part either - never descends into num or den, so it still
+  // selects the whole Frac: the one place where the fraction ITSELF is the
+  // thing under the cursor.
+  for (const [label, col] of [['the / bar', FRAC_SRC.indexOf('/')], ['the opening (', 0], ['the ) after x+1', FRAC_SRC.indexOf(')')]]) {
+    const hit = nodeAt(frac, 1, col);
+    check('nodeAt', `caret on ${label} [col ${col}] -> the whole Frac`,
+      !!hit && hit.expr.kind === 'Frac' && spanStr(hit.expr.span) === '1:0-1:11',
+      hit ? `${hit.expr.kind} ${spanStr(hit.expr.span)}` : 'null');
+  }
 
   // `2` in `y^2` -> the Pow itself (exponent leaf walks up one step).
   const expCol = FRAC_SRC.indexOf('y^2') + 2;
@@ -363,14 +385,22 @@ const frac = compile(FRAC_SRC);
   const out = renderLineWithHighlight(frac, 1, denomCol);
   check('Highlight', 'returns { line, latex } for a caret inside the denominator', !!out && out.line === 1 && typeof out.latex === 'string',
     JSON.stringify(out));
-  // nodeAt resolves the denominator caret to the Frac (see (b)), so the tint
-  // wraps the whole fraction - which is exactly the node containing `x-1` -
-  // and the line states an equation, so both SIDES are painted around it.
-  checkExact('Highlight', 'the hl-node wrapper encloses the fraction containing x-1, inside its hl-lhs side',
+  // nodeAt resolves the denominator caret to the DEN subtree (see (b)), so the
+  // tint sits inside the \frac's second argument - the reader sees which HALF
+  // of the fraction the caret is in, which is the whole point of the fraction
+  // being a two-part structure. The line also states an equation, so both
+  // SIDES are painted around it.
+  checkExact('Highlight', 'the hl-node wrapper encloses the DENOMINATOR only, inside the fraction, inside its hl-lhs side',
     out ? out.latex : '<null>',
-    String.raw`\htmlClass{hl-lhs}{\htmlClass{hl-node}{\frac{x+1}{x-1}}}=\htmlClass{hl-rhs}{y^{2}+1}`);
+    String.raw`\htmlClass{hl-lhs}{\frac{x+1}{\htmlClass{hl-node}{x-1}}}=\htmlClass{hl-rhs}{y^{2}+1}`);
   check('Highlight', 'the wrapped region contains the denominator text x-1',
     !!out && /\\htmlClass\{hl-node\}\{[^]*x-1/.test(out.latex), out && out.latex);
+
+  // Caret on the bar: the fraction as a whole, one wrapper around both parts.
+  const barOut = renderLineWithHighlight(frac, 1, FRAC_SRC.indexOf('/'));
+  checkExact('Highlight', 'a caret on the / bar tints the WHOLE fraction',
+    barOut ? barOut.latex : '<null>',
+    String.raw`\htmlClass{hl-lhs}{\htmlClass{hl-node}{\frac{x+1}{x-1}}}=\htmlClass{hl-rhs}{y^{2}+1}`);
 
   const expCol = FRAC_SRC.indexOf('y^2') + 2;
   const powOut = renderLineWithHighlight(frac, 1, expCol);
@@ -386,6 +416,28 @@ const frac = compile(FRAC_SRC);
     !!out && stripHighlight(out.latex) === frac.latexLines[0].latex, out && out.latex);
 
   check('Highlight', 'caret past the end of the line -> null', renderLineWithHighlight(frac, 1, FRAC_SRC.length + 5) === null);
+}
+{
+  // The renderer DISSOLVES the parens an author wrote around a fraction
+  // operand (`1/(1 + 1/n)` -> `\cfrac{1}{1+\cfrac{1}{n}}`): that Group node
+  // never reaches render(), so a highlight aimed AT it would simply vanish -
+  // no node in the output carries its span. The part lookup dissolves the
+  // same single level, so the tint lands on what the reader can actually see.
+  const SRC = '1/(1 + 1/n) = 2';
+  const r = compile(SRC);
+  const out = renderLineWithHighlight(r, 1, SRC.indexOf('1 + '));
+  checkExact('Highlight', 'a denominator written in parens tints its CONTENTS (the parens are not rendered)',
+    out ? out.latex : '<null>',
+    String.raw`\htmlClass{hl-lhs}{\cfrac{1}{\htmlClass{hl-node}{1+\cfrac{1}{n}}}}=\htmlClass{hl-rhs}{2}`);
+  check('Highlight', 'and stripping the wrappers reproduces the compiled line',
+    !!out && stripHighlight(out.latex) === r.latexLines[0].latex, out && out.latex);
+
+  // The same rule one level down: the INNER fraction's numerator is a part
+  // too, so a caret on it tints just that `1`.
+  const inner = renderLineWithHighlight(r, 1, SRC.indexOf('1/n'));
+  checkExact('Highlight', "the inner fraction's numerator tints on its own",
+    inner ? inner.latex : '<null>',
+    String.raw`\htmlClass{hl-lhs}{\cfrac{1}{1+\cfrac{\htmlClass{hl-node}{1}}{n}}}=\htmlClass{hl-rhs}{2}`);
 }
 {
   const PROSE = 'Let x be a real number';
