@@ -29,18 +29,18 @@ const EMPTY_RESULT: CompilationResult = { latexLines: [], logs: [], macros: {}, 
  * LogEntry's 'error'/'success' types stay unused by this path - and every
  * diagnostic carries a span, whose first line is what the Console shows and
  * what the editor gutter marks. One timestamp for the whole batch: they all
- * come from the same compile.
+ * come from the same compile, so the caller passes it in rather than this
+ * function reading the clock itself - that keeps it a pure function of its
+ * arguments, safe to call from a useMemo as well as from runCompilation.
  */
-const toLogEntries = (diagnostics: Diagnostic[]): LogEntry[] => {
-  const timestamp = new Date().toLocaleTimeString();
-  return diagnostics.map(d => ({
+const toLogEntries = (diagnostics: Diagnostic[], timestamp: string): LogEntry[] =>
+  diagnostics.map(d => ({
     type: d.severity === 'warn' ? 'warning' : 'info',
     message: d.message,
     hint: d.hint,
     line: d.span.startLine,
     timestamp,
   }));
-};
 
 export default function App() {
   // File state
@@ -55,20 +55,26 @@ export default function App() {
   // `sourceLines` are what nodeAt() reads, so caret-driven highlighting can
   // hang off this state without recompiling.
   const [engineResult, setEngineResult] = useState<EngineResult | null>(null);
+  // Console entries, kept separate from engineResult: a successful compile
+  // replaces this wholesale (see runCompilation), but a crash appends to it
+  // without touching engineResult, so the last good compile stays visible.
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [cursorLine, setCursorLine] = useState<number>(1);
 
   // Everything downstream (Preview, Console, status bar) still consumes the
-  // CompilationResult shape; only the producer changed.
+  // CompilationResult shape; only the producer changed. Pure reshaping only
+  // (no clock reads or other side-reading calls), so React is free to re-run
+  // this memo without that changing what ends up on screen.
   const compilationResult = useMemo<CompilationResult>(() => (
     engineResult
       ? {
           latexLines: engineResult.latexLines,
-          logs: toLogEntries(engineResult.diagnostics),
+          logs,
           macros: engineResult.macros,
           diagnostics: engineResult.diagnostics,
         }
-      : EMPTY_RESULT
-  ), [engineResult]);
+      : { ...EMPTY_RESULT, logs }
+  ), [engineResult, logs]);
 
   // UI State
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
@@ -147,15 +153,25 @@ export default function App() {
 
   // Compilation
   const runCompilation = useCallback(() => {
-    setEngineResult(compile(content));
+    const timestamp = new Date().toLocaleTimeString();
+    try {
+      const result = compile(content);
+      setEngineResult(result);
+      setLogs(toLogEntries(result.diagnostics, timestamp));
+    } catch (err) {
+      // The engine is fuzz-proven to never throw - this is cheap insurance
+      // against a slip getting through anyway. Uncaught, a throw here would
+      // blank the whole React root; instead keep the last good engineResult
+      // on screen (Preview/gutter untouched) and surface the crash as a log.
+      const message = err instanceof Error ? err.message : String(err);
+      setLogs(prev => [...prev, { type: 'error', message: `Engine error: ${message}`, timestamp }]);
+    }
   }, [content]);
 
-  // Initial Run
-  useEffect(() => {
-    runCompilation();
-  }, []);
-
-  // Live Update: Debounced compilation when content changes
+  // Live Update: Debounced compilation when content changes. This effect
+  // also fires on mount (effects run once regardless of their deps), so it
+  // covers the initial compile too - a separate mount-only effect would just
+  // compile a second time for no reason.
   useEffect(() => {
     const timeoutId = setTimeout(() => {
       runCompilation();

@@ -1,5 +1,9 @@
 // MathBrain Engine v2 - Public API. Everything outside services/engine/ talks
-// to the engine through this file and nothing else:
+// to the engine through this file and nothing else, with one deliberate
+// exception: Editor.tsx imports services/engine/language.ts directly for its
+// syntax-highlighting keyword tables (FUNCTIONS, GREEK, SCOPES, SYMBOL_MAP).
+// Those are static lookup data, not compilation, so routing them through
+// compile() would gain nothing and couple highlighting to a compile pass:
 //
 //   compile(source)                        -> LaTeX lines + macros + diagnostics
 //                                             + AST + statement index
